@@ -145,6 +145,23 @@ def test_assign_unassign_json_shape(fake_server, capsys):
     assert _sole_stdout_json(capsys) == {"issue": "CBRD-3", "assignee": None}
 
 
+def test_update_live_json_shape(fake_server, tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("CUBRID_JIRA_DIR", str(tmp_path))
+    fake_server.route("PUT", "/rest/api/2/issue/CBRD-9", response=None)
+    body_file = tmp_path / "body.md"
+    body_file.write_text("hello")
+    main([
+        "update", "CBRD-9",
+        "--summary", "t",
+        "--description-file", str(body_file),
+        "--yes", "--output", "json",
+    ])
+    assert _sole_stdout_json(capsys) == {
+        "issue": "CBRD-9",
+        "updated_fields": ["description", "summary"],
+    }
+
+
 def test_transition_list_json(fake_server, capsys):
     fake_server.route(
         "GET", "/rest/api/2/issue/CBRD-7/transitions",

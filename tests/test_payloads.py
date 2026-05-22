@@ -8,6 +8,7 @@ from cubrid_jira.cli import (
     build_create_payload,
     build_link_payload,
     build_transition_payload,
+    build_update_payload,
     resolve_transition_id,
 )
 
@@ -67,6 +68,59 @@ def test_assignee_clear_sends_null():
 
 def test_assignee_set():
     assert build_assignee_payload("vimkim") == {"name": "vimkim"}
+
+
+def test_update_payload_empty():
+    """Builder is dumb — caller is responsible for refusing the empty case."""
+    assert build_update_payload() == {"fields": {}}
+
+
+def test_update_payload_summary_only():
+    assert build_update_payload(summary="new title") == {
+        "fields": {"summary": "new title"}
+    }
+
+
+def test_update_payload_description_only():
+    assert build_update_payload(description="new body") == {
+        "fields": {"description": "new body"}
+    }
+
+
+def test_update_payload_priority_only():
+    assert build_update_payload(priority="Major") == {
+        "fields": {"priority": {"name": "Major"}}
+    }
+
+
+def test_update_payload_labels_empty_list_clears():
+    """`labels=[]` must serialise — it is the documented way to clear labels."""
+    assert build_update_payload(labels=[]) == {"fields": {"labels": []}}
+
+
+def test_update_payload_components_shape():
+    assert build_update_payload(components=["server", "qa"]) == {
+        "fields": {"components": [{"name": "server"}, {"name": "qa"}]}
+    }
+
+
+def test_update_payload_full():
+    out = build_update_payload(
+        summary="t",
+        description="d",
+        priority="Major",
+        labels=["a", "b"],
+        components=["sql"],
+    )
+    assert out == {
+        "fields": {
+            "summary": "t",
+            "description": "d",
+            "priority": {"name": "Major"},
+            "labels": ["a", "b"],
+            "components": [{"name": "sql"}],
+        }
+    }
 
 
 def test_resolve_transition_case_insensitive():

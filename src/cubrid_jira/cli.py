@@ -80,6 +80,30 @@ def build_create_payload(
     return {"fields": fields}
 
 
+def build_update_payload(
+    *,
+    summary: str | None = None,
+    description: str | None = None,
+    priority: str | None = None,
+    labels: list[str] | None = None,
+    components: list[str] | None = None,
+) -> dict:
+    # labels/components use `is not None` so callers can deliberately pass []
+    # to *clear* the field — Jira treats absent keys and empty lists differently.
+    fields: dict = {}
+    if summary is not None:
+        fields["summary"] = summary
+    if description is not None:
+        fields["description"] = description
+    if priority is not None:
+        fields["priority"] = {"name": priority}
+    if labels is not None:
+        fields["labels"] = list(labels)
+    if components is not None:
+        fields["components"] = [{"name": c} for c in components]
+    return {"fields": fields}
+
+
 def build_link_payload(link_type: str, inward_key: str, outward_key: str) -> dict:
     return {
         "type": {"name": link_type},
@@ -413,6 +437,54 @@ def cmd_assign(args) -> None:
         action = "unassigned" if assignee is None else f"assigned to {assignee}"
         print(f"{key} {action}; cache entry invalidated.", file=sys.stderr)
     _emit(args, client, {"issue": key, "assignee": assignee})
+
+
+# --------------------------------------------------------------------------- #
+# update
+# --------------------------------------------------------------------------- #
+
+def cmd_update(args) -> None:
+    key = parse_issue_key(args.issue)
+
+    description = None
+    if args.description_file:
+        if args.description_file == "-":
+            description = sys.stdin.read()
+        else:
+            description = Path(args.description_file).read_text(encoding="utf-8")
+
+    payload = build_update_payload(
+        summary=args.summary,
+        description=description,
+        priority=args.priority,
+        labels=args.labels,
+        components=args.components,
+    )
+    if not payload["fields"]:
+        print(
+            "Error: nothing to update; pass at least one of "
+            "--description-file / --summary / --priority / --label / --component",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    client = _make_client(args)
+    client.request("PUT", f"/rest/api/2/issue/{key}", body=payload)
+
+    updated_fields = sorted(payload["fields"].keys())
+
+    if _is_dry_run(args):
+        _emit(args, client, None)
+        return
+
+    cache_dir = resolve_cache_dir(args.dir)
+    invalidate(key, cache_dir)
+    if _output_format(args) == "text":
+        print(
+            f"Updated {key} fields {updated_fields}; cache entry invalidated.",
+            file=sys.stderr,
+        )
+    _emit(args, client, {"issue": key, "updated_fields": updated_fields})
 
 
 # --------------------------------------------------------------------------- #
@@ -938,6 +1010,30 @@ def _build_parser() -> argparse.ArgumentParser:
                           help='JIRA username, or "" to unassign.')
     _add_write_globals(p_assign)
     p_assign.set_defaults(func=cmd_assign)
+
+    p_update = sub.add_parser(
+        "update",
+        help="Edit fields on an existing issue (summary, description, priority, "
+             "labels, components).",
+    )
+    p_update.add_argument("issue", help="Issue key, e.g. CBRD-12345.")
+    p_update.add_argument("--summary", default=None,
+                          help="New issue summary (title).")
+    p_update.add_argument("--description-file", metavar="PATH", default=None,
+                          help="File whose contents replace the issue description. "
+                               "Use '-' to read from stdin.")
+    p_update.add_argument("--priority", default=None,
+                          help="One of: Blocker, Critical, Major, Minor, Trivial.")
+    p_update.add_argument("--label", action="append", dest="labels", metavar="LABEL",
+                          default=None,
+                          help="Repeat for multiple labels. NOTE: replaces the "
+                               "full label list (Jira REST 'fields' semantics).")
+    p_update.add_argument("--component", action="append", dest="components",
+                          metavar="NAME", default=None,
+                          help="Repeat for multiple components. NOTE: replaces the "
+                               "full component list.")
+    _add_write_globals(p_update)
+    p_update.set_defaults(func=cmd_update)
 
     p_convert_issue = sub.add_parser(
         "convert-to-issue",

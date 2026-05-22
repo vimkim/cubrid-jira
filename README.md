@@ -17,7 +17,7 @@ If you are an autonomous agent running in a shell, this is everything you need:
 ```text
 Canonical command   : cubrid-jira <subcommand> [args…]
 Subcommands         : read              search
-                      field-write       create | comment | link | transition | assign
+                      field-write       create | comment | link | transition | assign | update
                       structural-write  convert-to-issue | convert-to-subtask | reparent
 Credentials         : env  CUBRID_JIRA_USER  +  CUBRID_JIRA_PASSWORD
                       (no interactive prompt; falls back to ~/.netrc)
@@ -121,7 +121,7 @@ echo 'export CUBRID_JIRA_DIR="$HOME/.local/share/cubrid-jira/issues"' >> ~/.bash
 
 ---
 
-## Field-write flow — `create / comment / link / transition / assign`
+## Field-write flow — `create / comment / link / transition / assign / update`
 
 These edit fields on an existing or new issue. Same dry-run-by-default contract as the structural writes ([next section](#structural-write-flow--convert--reparent)); pass `--yes` to actually send.
 
@@ -143,7 +143,11 @@ cubrid-jira comment    CBRD-XXXXX --body-file note.md
 cubrid-jira link       CBRD-A --type Relates --to CBRD-B   # also Blocks | Cloners | Duplicate
 cubrid-jira transition CBRD-A [--to "In Progress"]         # omit --to to list available
 cubrid-jira assign     CBRD-A --to <username>              # --to "" to unassign
+cubrid-jira update     CBRD-A [--summary "..."] [--description-file path] \
+                       [--priority Major] [--label l1 --label l2] [--component sql]
 ```
+
+`update` edits an existing issue's fields. At least one of `--summary`, `--description-file`, `--priority`, `--label`, or `--component` is required. **`--label` and `--component` replace the full list** — they are not additive (Jira REST `fields` semantics). `--description-file -` reads from stdin.
 
 Global flags on every write subcommand:
 
@@ -158,7 +162,7 @@ Global flags on every write subcommand:
 ### Cache interaction on writes
 
 - `create` (live): the new issue is fetched and saved into the cache, so `cubrid-jira search NEW-KEY` is an immediate hit.
-- `comment`, `link`, `transition`, `assign` (live): cached markdown for the affected issue key(s) is **deleted**, so the next read re-fetches. `link` invalidates both sides.
+- `comment`, `link`, `transition`, `assign`, `update` (live): cached markdown for the affected issue key(s) is **deleted**, so the next read re-fetches. `link` invalidates both sides.
 
 ---
 
@@ -313,6 +317,22 @@ KEY=$(cubrid-jira create \
     --yes --output json | jq -r .key)
 echo "Created $KEY"
 cubrid-jira search "$KEY"   # immediate cache hit, no extra fetch
+```
+
+### Revise the description of an existing issue
+
+```sh
+# 1) Dry-run — review the PUT body.
+cubrid-jira update CBRD-26517 --description-file ./new-notes.md
+# → DRY RUN PUT /rest/api/2/issue/CBRD-26517  {"fields": {"description": "..."}}
+
+# 2) Commit. Cached markdown for CBRD-26517 is deleted, so the next
+#    `cubrid-jira search` re-fetches the live issue.
+cubrid-jira update CBRD-26517 \
+    --summary "OOS: heap_record_replace — updated repro" \
+    --description-file ./new-notes.md \
+    --yes --output json
+# → {"issue": "CBRD-26517", "updated_fields": ["description", "summary"]}
 ```
 
 ### Move a sub-task to a new parent

@@ -214,3 +214,80 @@ def test_assign_unassign_sends_null(fake_server, tmp_path, monkeypatch):
     main(["assign", "CBRD-3", "--to", "", "--yes"])
     rec = fake_server.requests[0]
     assert json.loads(rec.body.decode()) == {"name": None}
+
+
+# --------------------------------------------------------------------------- #
+# update
+# --------------------------------------------------------------------------- #
+
+def test_update_description_invalidates_cache_after_live_put(
+    fake_server, tmp_path, monkeypatch
+):
+    monkeypatch.setenv("CUBRID_JIRA_DIR", str(tmp_path))
+    (tmp_path / "CBRD-9.md").write_text("stale cache")
+    fake_server.route("PUT", "/rest/api/2/issue/CBRD-9", response=None)
+
+    body_file = tmp_path / "body.md"
+    body_file.write_text("new description body")
+
+    main(["update", "CBRD-9", "--description-file", str(body_file), "--yes"])
+
+    assert not (tmp_path / "CBRD-9.md").exists()
+    rec = fake_server.requests[0]
+    assert rec.method == "PUT"
+    assert rec.url.endswith("/rest/api/2/issue/CBRD-9")
+    assert json.loads(rec.body.decode()) == {
+        "fields": {"description": "new description body"}
+    }
+
+
+def test_update_dry_run_keeps_cache(fake_server, tmp_path, monkeypatch):
+    monkeypatch.setenv("CUBRID_JIRA_DIR", str(tmp_path))
+    (tmp_path / "CBRD-9.md").write_text("still here")
+    body_file = tmp_path / "body.md"
+    body_file.write_text("x")
+    main(["update", "CBRD-9", "--description-file", str(body_file)])
+    assert (tmp_path / "CBRD-9.md").exists()
+    assert fake_server.requests == []
+
+
+def test_update_with_no_fields_exits_1(fake_server, capsys):
+    with pytest.raises(SystemExit) as exc:
+        main(["update", "CBRD-9", "--yes"])
+    assert exc.value.code == 1
+    err = capsys.readouterr().err
+    assert "nothing to update" in err
+    assert fake_server.requests == []
+
+
+def test_update_summary_and_description_together(
+    fake_server, tmp_path, monkeypatch
+):
+    monkeypatch.setenv("CUBRID_JIRA_DIR", str(tmp_path))
+    fake_server.route("PUT", "/rest/api/2/issue/CBRD-9", response=None)
+    body_file = tmp_path / "body.md"
+    body_file.write_text("new body")
+    main([
+        "update", "CBRD-9",
+        "--summary", "fresh title",
+        "--description-file", str(body_file),
+        "--yes",
+    ])
+    rec = fake_server.requests[0]
+    assert json.loads(rec.body.decode()) == {
+        "fields": {"summary": "fresh title", "description": "new body"}
+    }
+
+
+def test_update_labels_replace_semantics(fake_server, tmp_path, monkeypatch):
+    monkeypatch.setenv("CUBRID_JIRA_DIR", str(tmp_path))
+    fake_server.route("PUT", "/rest/api/2/issue/CBRD-9", response=None)
+    main([
+        "update", "CBRD-9",
+        "--label", "alpha", "--label", "beta",
+        "--yes",
+    ])
+    rec = fake_server.requests[0]
+    assert json.loads(rec.body.decode()) == {
+        "fields": {"labels": ["alpha", "beta"]}
+    }
