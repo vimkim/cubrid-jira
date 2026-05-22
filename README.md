@@ -50,17 +50,15 @@ Any write subcommand without `--yes` is **safe to invoke** — it only prints th
 
 `uv tool install` is the right tool: isolated env, binary on `$PATH`, easy uninstall. `pipx` is an equivalent fallback.
 
-> The GitHub repo is still called `cubrid-jira-fetcher` (its v0 name). The package, the canonical binary, and all new code are `cubrid-jira`.
-
 ```sh
 # Recommended:
-uv tool install git+https://github.com/vimkim/cubrid-jira-fetcher.git
+uv tool install git+https://github.com/vimkim/cubrid-jira.git
 
 # pipx (equivalent, slower):
-pipx install git+https://github.com/vimkim/cubrid-jira-fetcher.git
+pipx install git+https://github.com/vimkim/cubrid-jira.git
 
 # From a local clone:
-cd cubrid-jira-fetcher && uv tool install . || pipx install .
+cd cubrid-jira && uv tool install . || pipx install .
 ```
 
 Installs three binaries on `$PATH`:
@@ -346,9 +344,8 @@ The cache directory is shared by `cubrid-jira search` and the legacy `cubrid-jir
 ## Development
 
 ```sh
-# The repo on GitHub kept its v0 name; the package and binary are `cubrid-jira`.
-git clone https://github.com/vimkim/cubrid-jira-fetcher.git
-cd cubrid-jira-fetcher
+git clone https://github.com/vimkim/cubrid-jira.git
+cd cubrid-jira
 uv sync --dev
 uv run pytest                # ~78 unit + mocked-integration tests in ~0.25s
 uv run pytest -m live        # also hits the real jira.cubrid.org (read-only)
