@@ -23,7 +23,18 @@ import sys
 from pathlib import Path
 
 from cubrid_jira.auth import resolve_credentials
-from cubrid_jira.cache import invalidate, resolve_cache_dir
+from cubrid_jira.cache import invalidate, resolve_cache_dir, resolve_field_map_path
+from cubrid_jira.fields import (
+    AmbiguousFieldError,
+    FieldSpecError,
+    build_name_index,
+    decode_field_value,
+    is_custom_field_id,
+    load_field_index,
+    parse_field_spec,
+    resolve_name,
+    save_field_index,
+)
 from cubrid_jira.http import JiraClient, fetch_issue, parse_issue_key
 from cubrid_jira.session import SessionClient
 from cubrid_jira.walk import fetch_recursive, save_issue
@@ -61,6 +72,7 @@ def build_create_payload(
     assignee: str | None = None,
     labels: list[str] | None = None,
     components: list[str] | None = None,
+    custom_fields: dict[str, object] | None = None,
 ) -> dict:
     fields: dict = {
         "project": {"key": project},
@@ -77,6 +89,9 @@ def build_create_payload(
         fields["labels"] = list(labels)
     if components:
         fields["components"] = [{"name": c} for c in components]
+    if custom_fields:
+        for k, v in custom_fields.items():
+            fields[k] = v
     return {"fields": fields}
 
 
@@ -87,6 +102,7 @@ def build_update_payload(
     priority: str | None = None,
     labels: list[str] | None = None,
     components: list[str] | None = None,
+    custom_fields: dict[str, object] | None = None,
 ) -> dict:
     # labels/components use `is not None` so callers can deliberately pass []
     # to *clear* the field — Jira treats absent keys and empty lists differently.
@@ -101,6 +117,9 @@ def build_update_payload(
         fields["labels"] = list(labels)
     if components is not None:
         fields["components"] = [{"name": c} for c in components]
+    if custom_fields:
+        for k, v in custom_fields.items():
+            fields[k] = v
     return {"fields": fields}
 
 
@@ -186,6 +205,65 @@ def _make_session(args) -> SessionClient:
     )
 
 
+def _resolve_custom_fields(args, client: JiraClient) -> dict[str, object]:
+    """Translate ``--field FIELD=VALUE`` repetitions into a ``customfield_NNN``
+    payload subdict.
+
+    Resolution order per FIELD:
+      1. raw ``customfield_\\d+`` id → used verbatim, no network.
+      2. display name → resolved against the on-disk name->id cache.
+      3. cache miss → one ``GET /rest/api/2/field`` (executes even in
+         dry-run, since GET is a read) refreshes the cache, then re-resolves.
+
+    Errors are raised as ``FieldSpecError`` / ``AmbiguousFieldError`` —
+    the caller is responsible for translating those to a CLI exit.
+    """
+    specs: list[str] = getattr(args, "fields", None) or []
+    if not specs:
+        return {}
+
+    # Decode VALUE per spec: a leading `{` or `[` JSON-parses (so select /
+    # cascading-select fields can be passed as {"value": "..."}); anything
+    # else stays a raw string.
+    parsed: list[tuple[str, object]] = []
+    for s in specs:
+        name, raw_value = parse_field_spec(s)
+        parsed.append((name, decode_field_value(raw_value)))
+
+    # Fast path: every spec is a raw customfield id; skip the network entirely.
+    if all(is_custom_field_id(n) for n, _ in parsed):
+        return {n: v for n, v in parsed}
+
+    map_path = resolve_field_map_path(getattr(args, "dir", None))
+    index = load_field_index(map_path)
+
+    needed = [n for n, _ in parsed if not is_custom_field_id(n)]
+    if any(n not in index for n in needed):
+        listing = client.request("GET", "/rest/api/2/field")
+        # Jira Server returns a bare JSON array; tolerate {"fields": [...]} too.
+        if isinstance(listing, dict):
+            listing = listing.get("fields", []) or []
+        if not isinstance(listing, list):
+            listing = []
+        index = build_name_index(listing)
+        save_field_index(map_path, index)
+
+    out: dict[str, object] = {}
+    for name, value in parsed:
+        if is_custom_field_id(name):
+            out[name] = value
+            continue
+        fid = resolve_name(name, index)
+        if fid is None:
+            raise FieldSpecError(
+                f"unknown JIRA field name {name!r}. "
+                "Open <server>/rest/api/2/field to list available fields, "
+                "or pass the explicit id (e.g. --field customfield_12345=...)."
+            )
+        out[fid] = value
+    return out
+
+
 def _validate_link_type(link_type: str) -> None:
     if link_type not in ALLOWED_LINK_TYPES:
         allowed = " | ".join(ALLOWED_LINK_TYPES)
@@ -262,6 +340,13 @@ def cmd_create(args) -> None:
     if args.description_file:
         description = Path(args.description_file).read_text(encoding="utf-8")
 
+    client = _make_client(args)
+    try:
+        custom = _resolve_custom_fields(args, client)
+    except (FieldSpecError, AmbiguousFieldError) as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+
     payload = build_create_payload(
         project=args.project,
         issue_type=args.type,
@@ -271,9 +356,9 @@ def cmd_create(args) -> None:
         assignee=args.assignee,
         labels=args.labels,
         components=args.components,
+        custom_fields=custom,
     )
 
-    client = _make_client(args)
     resp = client.request("POST", "/rest/api/2/issue", body=payload)
     new_key = (resp or {}).get("key")
 
@@ -303,7 +388,12 @@ def cmd_create(args) -> None:
         if full:
             save_issue(full, cache_dir)
         url = f"{args.server.rstrip('/')}/browse/{new_key}"
-        live_result = {"key": new_key, "url": url}
+        live_result = {
+            "key": new_key,
+            "id": (resp or {}).get("id"),
+            "self": (resp or {}).get("self"),
+            "url": url,
+        }
         if _output_format(args) == "text":
             print(f"Created {new_key}: {url}", file=sys.stderr)
     else:
@@ -564,22 +654,30 @@ def cmd_update(args) -> None:
         else:
             description = Path(args.description_file).read_text(encoding="utf-8")
 
+    client = _make_client(args)
+    try:
+        custom = _resolve_custom_fields(args, client)
+    except (FieldSpecError, AmbiguousFieldError) as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+
     payload = build_update_payload(
         summary=args.summary,
         description=description,
         priority=args.priority,
         labels=args.labels,
         components=args.components,
+        custom_fields=custom,
     )
     if not payload["fields"]:
         print(
             "Error: nothing to update; pass at least one of "
-            "--description-file / --summary / --priority / --label / --component",
+            "--description-file / --summary / --priority / --label / "
+            "--component / --field",
             file=sys.stderr,
         )
         sys.exit(1)
 
-    client = _make_client(args)
     client.request("PUT", f"/rest/api/2/issue/{key}", body=payload)
 
     updated_fields = sorted(payload["fields"].keys())
@@ -1007,6 +1105,33 @@ def cmd_reparent(args) -> None:
 # argparse wiring
 # --------------------------------------------------------------------------- #
 
+def _add_field_flag(p: argparse.ArgumentParser) -> None:
+    """Add the repeatable ``--field FIELD=VALUE`` flag.
+
+    FIELD may be a raw ``customfield_NNN`` id or a display name (e.g.
+    ``"QA Scenario"``). Names are resolved against the cached field map
+    populated by a one-time ``GET /rest/api/2/field`` and refreshed on
+    cache miss. Repeat ``--field`` to set multiple fields:
+
+      cubrid-jira create ... --field "QA Scenario=N/A" \
+                             --field customfield_210566=...
+    """
+    p.add_argument(
+        "--field",
+        action="append",
+        dest="fields",
+        default=None,
+        metavar="FIELD=VALUE",
+        help=(
+            'Set an arbitrary JIRA field. FIELD is a custom-field id '
+            '(e.g. customfield_210565) or display name (e.g. "QA Scenario"); '
+            'names are resolved via /rest/api/2/field and cached on disk. '
+            'Repeat for multiple fields. Example: '
+            '--field "QA Scenario=Not applicable; analysis ticket".'
+        ),
+    )
+
+
 def _add_write_globals(p: argparse.ArgumentParser) -> None:
     p.add_argument(
         "--dry-run",
@@ -1084,6 +1209,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p_create.add_argument("--link-blocks", action="append", dest="link_blocks",
                           metavar="KEY",
                           help="After creation, link the new issue as 'Blocks' to KEY.")
+    _add_field_flag(p_create)
     _add_write_globals(p_create)
     p_create.set_defaults(func=cmd_create)
 
@@ -1184,6 +1310,7 @@ def _build_parser() -> argparse.ArgumentParser:
                           metavar="NAME", default=None,
                           help="Repeat for multiple components. NOTE: replaces the "
                                "full component list.")
+    _add_field_flag(p_update)
     _add_write_globals(p_update)
     p_update.set_defaults(func=cmd_update)
 

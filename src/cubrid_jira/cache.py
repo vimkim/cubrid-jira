@@ -23,6 +23,15 @@ def resolve_cache_dir(cli_dir: str | None = None) -> Path:
     return DEFAULT_DIR
 
 
+def resolve_field_map_path(cli_dir: str | None = None) -> Path:
+    """Where the customfield name -> id map lives on disk.
+
+    Co-located with the issues cache so $CUBRID_JIRA_DIR / --dir isolation
+    in tests covers the field-map cache for free.
+    """
+    return resolve_cache_dir(cli_dir) / "field-map.json"
+
+
 def invalidate(key: str, directory: Path) -> int:
     """Delete cached files for ``key``. Returns number of files removed."""
     if not directory.exists():

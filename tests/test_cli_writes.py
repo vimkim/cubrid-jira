@@ -456,3 +456,251 @@ def test_update_labels_replace_semantics(fake_server, tmp_path, monkeypatch):
     assert json.loads(rec.body.decode()) == {
         "fields": {"labels": ["alpha", "beta"]}
     }
+
+
+# --------------------------------------------------------------------------- #
+# --field FIELD=VALUE (custom-field support)
+# --------------------------------------------------------------------------- #
+
+def test_create_with_raw_customfield_id_skips_lookup(
+    fake_server, tmp_path, monkeypatch, capsys
+):
+    """Passing a raw customfield_NNN id must NOT trigger /rest/api/2/field."""
+    monkeypatch.setenv("CUBRID_JIRA_DIR", str(tmp_path))
+    main([
+        "create",
+        "--project", "CBRD", "--type", "Bug", "--summary", "x",
+        "--field", "customfield_210565=N/A",
+    ])
+    # No requests at all in dry-run.
+    assert fake_server.requests == []
+    # Field map cache file must not have been created — no lookup happened.
+    assert not (tmp_path / "field-map.json").exists()
+    body = json.loads(capsys.readouterr().out)
+    assert body["fields"]["customfield_210565"] == "N/A"
+
+
+def test_create_with_field_name_fetches_and_caches_map(
+    fake_server, tmp_path, monkeypatch, capsys
+):
+    monkeypatch.setenv("CUBRID_JIRA_DIR", str(tmp_path))
+    fake_server.route(
+        "GET", "/rest/api/2/field",
+        response=[
+            {"id": "customfield_210565", "name": "QA Scenario", "custom": True},
+            {"id": "customfield_210566", "name": "Other Field", "custom": True},
+            {"id": "summary", "name": "Summary", "custom": False},
+        ],
+    )
+    main([
+        "create",
+        "--project", "CBRD", "--type", "Bug", "--summary", "x",
+        "--field", "QA Scenario=Not applicable; analysis ticket",
+    ])
+    # GET happened (always-execute even in dry-run); no POST yet.
+    methods = [r.method for r in fake_server.requests]
+    assert methods == ["GET"]
+
+    # Cache file written and round-trips.
+    map_file = tmp_path / "field-map.json"
+    assert map_file.exists()
+    cached = json.loads(map_file.read_text())
+    assert cached["QA Scenario"] == ["customfield_210565"]
+
+    # Dry-run body printed to stdout contains the resolved id.
+    body = json.loads(capsys.readouterr().out)
+    assert body["fields"]["customfield_210565"] == "Not applicable; analysis ticket"
+
+
+def test_create_with_field_name_uses_cache_on_second_call(
+    fake_server, tmp_path, monkeypatch
+):
+    """A cached name->id map must short-circuit /rest/api/2/field."""
+    monkeypatch.setenv("CUBRID_JIRA_DIR", str(tmp_path))
+    (tmp_path / "field-map.json").write_text(json.dumps({
+        "QA Scenario": ["customfield_210565"],
+    }))
+    main([
+        "create",
+        "--project", "CBRD", "--type", "Bug", "--summary", "x",
+        "--field", "QA Scenario=cached value",
+    ])
+    # No /rest/api/2/field GET because the cache hit covered every name.
+    assert fake_server.requests == []
+
+
+def test_create_field_ambiguous_name_errors(
+    fake_server, tmp_path, monkeypatch, capsys
+):
+    monkeypatch.setenv("CUBRID_JIRA_DIR", str(tmp_path))
+    fake_server.route(
+        "GET", "/rest/api/2/field",
+        response=[
+            {"id": "customfield_1", "name": "QA Scenario", "custom": True},
+            {"id": "customfield_2", "name": "QA Scenario", "custom": True},
+        ],
+    )
+    with pytest.raises(SystemExit) as exc:
+        main([
+            "create",
+            "--project", "CBRD", "--type", "Bug", "--summary", "x",
+            "--field", "QA Scenario=val",
+        ])
+    assert exc.value.code == 1
+    err = capsys.readouterr().err
+    assert "ambiguous" in err
+    assert "customfield_1" in err  # both ids surfaced in the hint
+
+
+def test_create_field_unknown_name_errors(
+    fake_server, tmp_path, monkeypatch, capsys
+):
+    monkeypatch.setenv("CUBRID_JIRA_DIR", str(tmp_path))
+    fake_server.route(
+        "GET", "/rest/api/2/field",
+        response=[{"id": "customfield_1", "name": "Something Else"}],
+    )
+    with pytest.raises(SystemExit) as exc:
+        main([
+            "create",
+            "--project", "CBRD", "--type", "Bug", "--summary", "x",
+            "--field", "QA Scenario=val",
+        ])
+    assert exc.value.code == 1
+    err = capsys.readouterr().err
+    assert "unknown" in err.lower()
+    assert "QA Scenario" in err
+
+
+def test_create_field_malformed_spec_errors(fake_server, tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("CUBRID_JIRA_DIR", str(tmp_path))
+    with pytest.raises(SystemExit):
+        main([
+            "create",
+            "--project", "CBRD", "--type", "Bug", "--summary", "x",
+            "--field", "no-equals-sign-here",
+        ])
+    err = capsys.readouterr().err
+    assert "FIELD=VALUE" in err
+
+
+def test_create_field_repeatable(fake_server, tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("CUBRID_JIRA_DIR", str(tmp_path))
+    main([
+        "create",
+        "--project", "CBRD", "--type", "Bug", "--summary", "x",
+        "--field", "customfield_1=a",
+        "--field", "customfield_2=b",
+    ])
+    body = json.loads(capsys.readouterr().out)
+    assert body["fields"]["customfield_1"] == "a"
+    assert body["fields"]["customfield_2"] == "b"
+
+
+def test_create_live_with_field_sends_resolved_payload(
+    fake_server, tmp_path, monkeypatch
+):
+    monkeypatch.setenv("CUBRID_JIRA_DIR", str(tmp_path))
+    (tmp_path / "field-map.json").write_text(json.dumps({
+        "QA Scenario": ["customfield_210565"],
+    }))
+    fake_server.route(
+        "POST", "/rest/api/2/issue",
+        response={"id": "1", "key": "CBRD-999"},
+    )
+    fake_server.route(
+        "GET", "/rest/api/2/issue/CBRD-999?expand=renderedFields",
+        response={"key": "CBRD-999", "fields": {"summary": "x"}},
+    )
+    main([
+        "create",
+        "--project", "CBRD", "--type", "Bug", "--summary", "x",
+        "--field", "QA Scenario=actual qa text",
+        "--yes",
+    ])
+    post = next(r for r in fake_server.requests if r.method == "POST")
+    body = json.loads(post.body.decode())
+    assert body["fields"]["customfield_210565"] == "actual qa text"
+
+
+def test_update_with_field_only_succeeds(fake_server, tmp_path, monkeypatch):
+    """`--field` alone is a valid update payload — no other field flags needed."""
+    monkeypatch.setenv("CUBRID_JIRA_DIR", str(tmp_path))
+    fake_server.route("PUT", "/rest/api/2/issue/CBRD-9", response=None)
+    main([
+        "update", "CBRD-9",
+        "--field", "customfield_210565=updated",
+        "--yes",
+    ])
+    rec = next(r for r in fake_server.requests if r.method == "PUT")
+    assert json.loads(rec.body.decode()) == {
+        "fields": {"customfield_210565": "updated"}
+    }
+
+
+def test_update_field_and_standard_together(fake_server, tmp_path, monkeypatch):
+    monkeypatch.setenv("CUBRID_JIRA_DIR", str(tmp_path))
+    fake_server.route("PUT", "/rest/api/2/issue/CBRD-9", response=None)
+    main([
+        "update", "CBRD-9",
+        "--summary", "new title",
+        "--field", "customfield_1=v",
+        "--yes",
+    ])
+    rec = next(r for r in fake_server.requests if r.method == "PUT")
+    assert json.loads(rec.body.decode()) == {
+        "fields": {"summary": "new title", "customfield_1": "v"}
+    }
+
+
+def test_update_error_message_mentions_field(fake_server, capsys):
+    """The 'nothing to update' hint should advertise --field too."""
+    with pytest.raises(SystemExit):
+        main(["update", "CBRD-9", "--yes"])
+    err = capsys.readouterr().err
+    assert "--field" in err
+
+
+def test_create_field_json_value_is_decoded_for_select(
+    fake_server, tmp_path, monkeypatch
+):
+    """Single-select fields (e.g. CUBRID's QA Scenario) need {"value": "..."}.
+
+    Verifies the JSON-decode path: --field 'X={"value":"Y"}' must serialise
+    as {"X": {"value": "Y"}} in the POST body, not the literal string.
+    """
+    monkeypatch.setenv("CUBRID_JIRA_DIR", str(tmp_path))
+    (tmp_path / "field-map.json").write_text(json.dumps({
+        "QA Scenario": ["customfield_210565"],
+    }))
+    fake_server.route(
+        "POST", "/rest/api/2/issue",
+        response={"id": "1", "key": "CBRD-999"},
+    )
+    fake_server.route(
+        "GET", "/rest/api/2/issue/CBRD-999?expand=renderedFields",
+        response={"key": "CBRD-999", "fields": {"summary": "x"}},
+    )
+    main([
+        "create",
+        "--project", "CBRD", "--type", "Task", "--summary", "x",
+        "--field", 'QA Scenario={"value":"Not Required"}',
+        "--yes",
+    ])
+    post = next(r for r in fake_server.requests if r.method == "POST")
+    body = json.loads(post.body.decode())
+    assert body["fields"]["customfield_210565"] == {"value": "Not Required"}
+
+
+def test_create_field_malformed_json_value_errors(
+    fake_server, tmp_path, monkeypatch, capsys
+):
+    monkeypatch.setenv("CUBRID_JIRA_DIR", str(tmp_path))
+    with pytest.raises(SystemExit):
+        main([
+            "create",
+            "--project", "CBRD", "--type", "Bug", "--summary", "x",
+            "--field", 'customfield_1={"value": broken',
+        ])
+    err = capsys.readouterr().err
+    assert "JSON" in err

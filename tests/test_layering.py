@@ -61,6 +61,19 @@ def test_wizard_does_not_import_urllib():
     )
 
 
+def test_fields_does_not_import_urllib():
+    # fields.py parses --field specs and caches a name->id map; it must
+    # not talk HTTP — the CLI handler is the one that fetches /rest/api/2/field
+    # via JiraClient and hands the listing in.
+    names = _imports_of("fields")
+    assert not any(n == "urllib" or n.startswith("urllib.") for n in names), (
+        f"cubrid_jira.fields must not import urllib; found: {sorted(names)}"
+    )
+    assert "subprocess" not in names, (
+        f"cubrid_jira.fields must not import subprocess; found: {sorted(names)}"
+    )
+
+
 def test_back_compat_shim_warns_and_reexports():
     import warnings
 

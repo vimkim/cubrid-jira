@@ -73,7 +73,14 @@ def test_link_dry_run_json(fake_server, capsys):
 
 def test_create_live_json_shape(fake_server, tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("CUBRID_JIRA_DIR", str(tmp_path))
-    fake_server.route("POST", "/rest/api/2/issue", response={"id": "1", "key": "CBRD-999"})
+    fake_server.route(
+        "POST", "/rest/api/2/issue",
+        response={
+            "id": "12345",
+            "key": "CBRD-999",
+            "self": "http://jira.cubrid.org/rest/api/2/issue/12345",
+        },
+    )
     fake_server.route(
         "GET", "/rest/api/2/issue/CBRD-999?expand=renderedFields",
         response={"key": "CBRD-999", "fields": {"summary": "hi"}},
@@ -84,8 +91,13 @@ def test_create_live_json_shape(fake_server, tmp_path, monkeypatch, capsys):
         "--yes", "--output", "json",
     ])
     result = _sole_stdout_json(capsys)
+    # Agents chain on `key` to do anything useful (link, comment, transition);
+    # `id` and `self` round out the canonical Jira create response so chained
+    # callers don't need a second GET to reconstruct it.
     assert result == {
         "key": "CBRD-999",
+        "id": "12345",
+        "self": "http://jira.cubrid.org/rest/api/2/issue/12345",
         "url": "http://jira.cubrid.org/browse/CBRD-999",
     }
 

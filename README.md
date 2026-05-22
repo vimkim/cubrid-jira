@@ -139,7 +139,8 @@ cubrid-jira create --project CBRD --type Bug --summary "..." --yes
 cubrid-jira create     --project CBRD --type Bug --summary "..." \
                        [--description-file path] [--priority Major] [--assignee user] \
                        [--label l1 --label l2] [--component sql] \
-                       [--link-relates CBRD-Y] [--link-blocks CBRD-Z]
+                       [--link-relates CBRD-Y] [--link-blocks CBRD-Z] \
+                       [--field "QA Scenario={\"value\":\"Not Required\"}"] [--field customfield_NNN=...]
 cubrid-jira comment    CBRD-XXXXX --body-file note.md
 cubrid-jira comment-list   CBRD-XXXXX [--limit N]                  # list comments (read-only)
 cubrid-jira comment-update CBRD-XXXXX --id <COMMENT-ID> --body-file note.md
@@ -148,10 +149,33 @@ cubrid-jira link       CBRD-A --type Relates --to CBRD-B   # also Blocks | Clone
 cubrid-jira transition CBRD-A [--to "In Progress"]         # omit --to to list available
 cubrid-jira assign     CBRD-A --to <username>              # --to "" to unassign
 cubrid-jira update     CBRD-A [--summary "..."] [--description-file path] \
-                       [--priority Major] [--label l1 --label l2] [--component sql]
+                       [--priority Major] [--label l1 --label l2] [--component sql] \
+                       [--field "QA Scenario={\"value\":\"Complete\"}"] [--field customfield_NNN=...]
 ```
 
-`update` edits an existing issue's fields. At least one of `--summary`, `--description-file`, `--priority`, `--label`, or `--component` is required. **`--label` and `--component` replace the full list** — they are not additive (Jira REST `fields` semantics). `--description-file -` reads from stdin.
+`update` edits an existing issue's fields. At least one of `--summary`, `--description-file`, `--priority`, `--label`, `--component`, or `--field` is required. **`--label` and `--component` replace the full list** — they are not additive (Jira REST `fields` semantics). `--description-file -` reads from stdin.
+
+### `--field FIELD=VALUE` — arbitrary custom fields
+
+Repeat `--field` to set any JIRA custom field (the canonical use case is project-required fields like CUBRID's `QA Scenario`, which gates every `create` against `CBRD`).
+
+- `FIELD` may be a raw id (`customfield_210565`) or a display name (`"QA Scenario"`). Names are resolved against `/rest/api/2/field` on first use and cached at `<cache_dir>/field-map.json`; subsequent calls skip the lookup.
+- `VALUE` starting with `{` or `[` is JSON-decoded — needed for **single-select**, **cascading-select**, **multi-select**, **user**, and **date** fields. Anything else is sent as a raw string (text/textarea fields).
+- Ambiguous display names (two custom fields with the same `name`) error out and ask you to disambiguate by id — silently picking one would risk writing to the wrong field.
+
+```sh
+# Text field — bare string is fine.
+cubrid-jira update CBRD-XXXXX --field "Some Free Text=hello" --yes
+
+# Single-select field — wrap value in JSON.
+cubrid-jira create --project CBRD --type Task --summary "..." \
+  --field 'QA Scenario={"value":"Not Required"}' --yes
+
+# Discover valid option labels for a required select field:
+curl -u "$CUBRID_JIRA_USER:$CUBRID_JIRA_PASSWORD" \
+  'http://jira.cubrid.org/rest/api/2/issue/createmeta?projectKeys=CBRD&issuetypeNames=Task&expand=projects.issuetypes.fields' \
+  | jq '.projects[0].issuetypes[0].fields["customfield_210565"].allowedValues'
+```
 
 Global flags on every write subcommand:
 
