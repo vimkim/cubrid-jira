@@ -2,12 +2,13 @@
 
 Fetch CUBRID JIRA issues as markdown, with a cache-first lookup designed for AI agents and slash commands.
 
-This package provides two command-line tools:
+This package provides three command-line tools:
 
 | Command | What it does |
 |---|---|
 | `cubrid-jira-search` | Look up **one** issue. Prints markdown to stdout. Uses a local cache; fetches from JIRA only on cache miss. **Use this from agents.** |
 | `cubrid-jira-fetch` | Bulk-fetch an issue **and its related issues** into a directory of markdown files. |
+| `cubrid-jira` | Parent command with read **and** write subcommands: `search`, `create`, `comment`, `link`, `transition`, `assign`. Writes share the same cache and credential layer. See [Writes](#writes-create-comment-link-transition-assign) below. |
 
 Uses the JIRA REST API over plain HTTP, bypassing the redirect loop that occurs when tools force-upgrade to HTTPS.
 
@@ -159,6 +160,101 @@ Each markdown file contains: title and link, a metadata table (status, priority,
 | `--no-recurse` | — | Only fetch the given issue (same as `--depth 0`) |
 | `--force` | — | Re-download and overwrite already-saved files |
 | `--json` | — | Save raw JSON instead of markdown |
+
+---
+
+## Writes (`create`, `comment`, `link`, `transition`, `assign`)
+
+The `cubrid-jira` parent command extends the read-only fetcher with write operations against the same JIRA Server. **All write subcommands are dry-run by default; you must pass `--yes` to actually send the request.** This is intentional — there is no staging JIRA, only production.
+
+### ⚠️ Security & lockout warnings
+
+- **Cleartext credentials.** `jira.cubrid.org` only speaks HTTP; basic-auth headers travel unencrypted. Use a network you trust and a dedicated JIRA password, not your SSO password.
+- **CAPTCHA lockout.** Jira Server 7.7.1 locks an account and requires a web-UI CAPTCHA after a small number of failed basic-auth attempts. `cubrid-jira` **never retries on HTTP 401**; if you see the 401 error, fix your credentials before retrying — repeated failures will lock you out of the REST API until you log in via the browser and clear the CAPTCHA.
+
+### Credentials
+
+Resolved in this order (first hit wins):
+
+1. `CUBRID_JIRA_USER` + `CUBRID_JIRA_PASSWORD` environment variables
+2. `~/.netrc` entry for `jira.cubrid.org`
+3. Hard error with an instructive message (no interactive prompt — these tools are meant to run from agents)
+
+Example `~/.netrc`:
+
+```
+machine jira.cubrid.org
+  login your-jira-username
+  password your-jira-password
+```
+
+```sh
+chmod 600 ~/.netrc
+```
+
+### Subcommands at a glance
+
+```sh
+# Always dry-run by default — print the planned request and exit.
+cubrid-jira create     --project CBRD --type Bug --summary "..." \
+                       [--description-file path] [--priority Major] [--assignee user] \
+                       [--label l1 --label l2] [--component sql] \
+                       [--link-relates CBRD-Y] [--link-blocks CBRD-Z]
+cubrid-jira comment    CBRD-XXXXX --body-file note.md
+cubrid-jira link       CBRD-A --type Relates --to CBRD-B   # also Blocks | Cloners | Duplicate
+cubrid-jira transition CBRD-A [--to "In Progress"]         # omit --to to list available transitions
+cubrid-jira assign     CBRD-A --to <username>              # --to "" to unassign
+
+# Add --yes to actually perform the write.
+cubrid-jira <subcommand> ... --yes
+```
+
+Global flags on every write subcommand:
+
+| Flag | Default | Description |
+|---|---|---|
+| `--dry-run` | (default behavior) | Print the resolved URL, masked headers, and JSON body. Don't send. |
+| `--yes` | off | Required to actually send the request. |
+| `--server URL` | `http://jira.cubrid.org` | JIRA base URL. |
+| `-d`, `--dir DIR` | shared cache (see above) | Cache directory used for the post-write cache update. |
+
+### Cache interaction
+
+- `create`: on success, the new issue is fetched and saved into the cache — `cubrid-jira search NEW-KEY` immediately hits the cache.
+- `comment`, `link`, `transition`, `assign`: the cached markdown for the affected issue key(s) is **deleted**, so the next read re-fetches fresh data. (For `link`, both sides of the link are invalidated.)
+
+### Worked example — create a bug and relate it to `CBRD-26517`
+
+```sh
+# 1) Dry-run: review the planned request first.
+cubrid-jira create \
+    --project CBRD \
+    --type Bug \
+    --summary "OOS: heap_record_replace crashes when …" \
+    --priority Major \
+    --description-file ./bug-notes.md \
+    --link-relates CBRD-26517
+
+# 2) Same command, with --yes, actually creates the issue.
+cubrid-jira create \
+    --project CBRD \
+    --type Bug \
+    --summary "OOS: heap_record_replace crashes when …" \
+    --priority Major \
+    --description-file ./bug-notes.md \
+    --link-relates CBRD-26517 \
+    --yes
+# → "Created CBRD-NNNNN: http://jira.cubrid.org/browse/CBRD-NNNNN"
+# → ./~/.local/share/cubrid-jira/issues/CBRD-NNNNN.md is now cached
+```
+
+### Errors
+
+- **401 — Auth failed:** hard exit, no retry. Reset CAPTCHA in the web UI and re-check credentials.
+- **403 — Forbidden:** authenticated but missing permission for the resource.
+- **404:** check the issue key.
+- **400:** the server's `errorMessages` / `errors` payload is printed verbatim (usually field validation).
+- Transient network / `5xx`: retried once with a short backoff.
 
 ---
 
