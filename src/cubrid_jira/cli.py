@@ -2,8 +2,7 @@
 
 Subcommands
 -----------
-search      Cache-first read (existing behavior, kept here so the old
-            ``cubrid-jira-search`` alias dispatches through the same code).
+search      Cache-first read (existing behavior).
 create      POST /rest/api/2/issue
 comment     POST /rest/api/2/issue/{key}/comment
 link        POST /rest/api/2/issueLink
@@ -11,24 +10,22 @@ transition  GET  /rest/api/2/issue/{key}/transitions  +  POST same path
 assign      PUT  /rest/api/2/issue/{key}/assignee
 
 All write subcommands accept ``--dry-run`` (default), ``--yes`` (required for
-live writes), ``--server URL``, and ``-d/--dir`` for the cache directory.
+live writes), ``--server URL``, ``-d/--dir`` for the cache directory, and
+``--output {text,json}`` to switch between human-readable status and a
+single-line JSON result object for downstream pipelines.
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
-from cubrid_jira_fetcher.auth import resolve_credentials
-from cubrid_jira_fetcher.cache import invalidate, resolve_cache_dir
-from cubrid_jira_fetcher.client import JiraClient
-from cubrid_jira_fetcher.fetcher import (
-    fetch_issue,
-    fetch_recursive,
-    parse_issue_key,
-    save_issue,
-)
+from cubrid_jira.auth import resolve_credentials
+from cubrid_jira.cache import invalidate, resolve_cache_dir
+from cubrid_jira.http import JiraClient, fetch_issue, parse_issue_key
+from cubrid_jira.walk import fetch_recursive, save_issue
 
 DEFAULT_SERVER = "http://jira.cubrid.org"
 ALLOWED_LINK_TYPES = ("Blocks", "Cloners", "Duplicate", "Relates")
@@ -84,19 +81,15 @@ def build_transition_payload(transition_id: str) -> dict:
 
 
 def build_assignee_payload(name: str | None) -> dict:
-    # ``--to ""`` (empty string) means unassign; we send {"name": null}.
     return {"name": name if name else None}
 
 
-def resolve_transition_id(
-    transitions: list[dict], wanted_name: str
-) -> str:
-    """Return the transition id matching ``wanted_name`` (case-insensitive).
-
-    Raises ``ValueError`` on no-match or ambiguous-match.
-    """
+def resolve_transition_id(transitions: list[dict], wanted_name: str) -> str:
     target = wanted_name.strip().lower()
-    matches = [t for t in transitions if str(t.get("name", "")).strip().lower() == target]
+    matches = [
+        t for t in transitions
+        if str(t.get("name", "")).strip().lower() == target
+    ]
     if not matches:
         available = ", ".join(repr(t.get("name", "?")) for t in transitions) or "(none)"
         raise ValueError(
@@ -120,9 +113,19 @@ def _is_dry_run(args) -> bool:
     return not getattr(args, "yes", False)
 
 
+def _output_format(args) -> str:
+    return getattr(args, "output", "text")
+
+
 def _make_client(args) -> JiraClient:
     user, pw = resolve_credentials(args.server)
-    return JiraClient(args.server, user, pw, dry_run=_is_dry_run(args))
+    return JiraClient(
+        args.server,
+        user,
+        pw,
+        dry_run=_is_dry_run(args),
+        output_format=_output_format(args),
+    )
 
 
 def _validate_link_type(link_type: str) -> None:
@@ -135,8 +138,25 @@ def _validate_link_type(link_type: str) -> None:
         sys.exit(1)
 
 
+def _emit(args, client: JiraClient, live_result: dict | None) -> None:
+    """Centralised --output json emitter for write subcommands.
+
+    In ``--output json`` mode this prints exactly one line on stdout:
+    the dry-run plan or the live success result. In ``text`` mode it
+    does nothing — the per-command handler is responsible for any
+    stderr status lines.
+    """
+    if _output_format(args) != "json":
+        return
+    if _is_dry_run(args):
+        payload = {"dry_run": True, "requests": client.recorded_requests}
+    else:
+        payload = live_result or {}
+    print(json.dumps(payload, ensure_ascii=False))
+
+
 # --------------------------------------------------------------------------- #
-# search (read-only — also exposed via the legacy ``cubrid-jira-search`` shim)
+# search (read-only)
 # --------------------------------------------------------------------------- #
 
 def _find_cached(key: str, directory: Path) -> list[Path]:
@@ -199,8 +219,6 @@ def cmd_create(args) -> None:
     resp = client.request("POST", "/rest/api/2/issue", body=payload)
     new_key = (resp or {}).get("key")
 
-    # Optional follow-up links. In dry-run we still print them with a
-    # <new-issue-key> placeholder so the user can see the full plan.
     link_specs: list[tuple[str, str]] = []
     for k in args.link_relates or []:
         link_specs.append(("Relates", parse_issue_key(k)))
@@ -216,24 +234,28 @@ def cmd_create(args) -> None:
         )
 
     if _is_dry_run(args):
+        _emit(args, client, None)
         return
 
+    live_result: dict | None = None
     if new_key:
         cache_dir = resolve_cache_dir(args.dir)
         cache_dir.mkdir(parents=True, exist_ok=True)
         full = fetch_issue(new_key)
         if full:
             save_issue(full, cache_dir)
-        print(
-            f"Created {new_key}: {args.server.rstrip('/')}/browse/{new_key}",
-            file=sys.stderr,
-        )
+        url = f"{args.server.rstrip('/')}/browse/{new_key}"
+        live_result = {"key": new_key, "url": url}
+        if _output_format(args) == "text":
+            print(f"Created {new_key}: {url}", file=sys.stderr)
     else:
-        print(
-            "Warning: create response did not include a 'key' field; "
-            "cache not updated.",
-            file=sys.stderr,
-        )
+        if _output_format(args) == "text":
+            print(
+                "Warning: create response did not include a 'key' field; "
+                "cache not updated.",
+                file=sys.stderr,
+            )
+    _emit(args, client, live_result)
 
 
 # --------------------------------------------------------------------------- #
@@ -245,18 +267,22 @@ def cmd_comment(args) -> None:
     body_text = Path(args.body_file).read_text(encoding="utf-8")
 
     client = _make_client(args)
-    client.request(
+    resp = client.request(
         "POST",
         f"/rest/api/2/issue/{key}/comment",
         body=build_comment_payload(body_text),
     )
 
     if _is_dry_run(args):
+        _emit(args, client, None)
         return
 
     cache_dir = resolve_cache_dir(args.dir)
     invalidate(key, cache_dir)
-    print(f"Commented on {key}; cache entry invalidated.", file=sys.stderr)
+    live_result = {"issue": key, "comment_id": (resp or {}).get("id")}
+    if _output_format(args) == "text":
+        print(f"Commented on {key}; cache entry invalidated.", file=sys.stderr)
+    _emit(args, client, live_result)
 
 
 # --------------------------------------------------------------------------- #
@@ -276,15 +302,18 @@ def cmd_link(args) -> None:
     )
 
     if _is_dry_run(args):
+        _emit(args, client, None)
         return
 
     cache_dir = resolve_cache_dir(args.dir)
     invalidate(src, cache_dir)
     invalidate(dst, cache_dir)
-    print(
-        f"Linked {src} -[{args.link_type}]-> {dst}; cache invalidated for both.",
-        file=sys.stderr,
-    )
+    if _output_format(args) == "text":
+        print(
+            f"Linked {src} -[{args.link_type}]-> {dst}; cache invalidated for both.",
+            file=sys.stderr,
+        )
+    _emit(args, client, {"inward": src, "outward": dst, "type": args.link_type})
 
 
 # --------------------------------------------------------------------------- #
@@ -295,14 +324,18 @@ def cmd_transition(args) -> None:
     key = parse_issue_key(args.issue)
     client = _make_client(args)
 
-    # GET runs live even in dry-run mode so we can resolve the id.
     resp = client.request("GET", f"/rest/api/2/issue/{key}/transitions")
     transitions = (resp or {}).get("transitions") or []
 
     if not args.to:
-        print(f"Available transitions for {key}:", file=sys.stderr)
-        for t in transitions:
-            print(f"  {t.get('id')}: {t.get('name')}")
+        if _output_format(args) == "json":
+            print(json.dumps(
+                {"issue": key, "transitions": transitions}, ensure_ascii=False
+            ))
+        else:
+            print(f"Available transitions for {key}:", file=sys.stderr)
+            for t in transitions:
+                print(f"  {t.get('id')}: {t.get('name')}")
         return
 
     try:
@@ -318,11 +351,17 @@ def cmd_transition(args) -> None:
     )
 
     if _is_dry_run(args):
+        _emit(args, client, None)
         return
 
     cache_dir = resolve_cache_dir(args.dir)
     invalidate(key, cache_dir)
-    print(f"Transitioned {key} -> {args.to}; cache entry invalidated.", file=sys.stderr)
+    if _output_format(args) == "text":
+        print(
+            f"Transitioned {key} -> {args.to}; cache entry invalidated.",
+            file=sys.stderr,
+        )
+    _emit(args, client, {"issue": key, "transition_id": tid, "to": args.to})
 
 
 # --------------------------------------------------------------------------- #
@@ -337,12 +376,16 @@ def cmd_assign(args) -> None:
     client.request("PUT", f"/rest/api/2/issue/{key}/assignee", body=payload)
 
     if _is_dry_run(args):
+        _emit(args, client, None)
         return
 
     cache_dir = resolve_cache_dir(args.dir)
     invalidate(key, cache_dir)
-    action = "unassigned" if not args.to else f"assigned to {args.to}"
-    print(f"{key} {action}; cache entry invalidated.", file=sys.stderr)
+    assignee = args.to if args.to else None
+    if _output_format(args) == "text":
+        action = "unassigned" if assignee is None else f"assigned to {assignee}"
+        print(f"{key} {action}; cache entry invalidated.", file=sys.stderr)
+    _emit(args, client, {"issue": key, "assignee": assignee})
 
 
 # --------------------------------------------------------------------------- #
@@ -372,6 +415,13 @@ def _add_write_globals(p: argparse.ArgumentParser) -> None:
         help="Cache directory (default: $CUBRID_JIRA_DIR or "
              "~/.local/share/cubrid-jira/issues/).",
     )
+    p.add_argument(
+        "--output",
+        choices=("text", "json"),
+        default="text",
+        help="Output format. 'json' prints a single-line result object on stdout "
+             "(for piping into jq/agents); errors still go to stderr.",
+    )
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -384,7 +434,6 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     sub = parser.add_subparsers(dest="cmd", required=True, metavar="SUBCOMMAND")
 
-    # search ------------------------------------------------------------------
     p_search = sub.add_parser(
         "search",
         help="Cache-first read of one issue; prints markdown to stdout.",
@@ -401,7 +450,6 @@ def _build_parser() -> argparse.ArgumentParser:
                           help="Bypass cache and re-fetch.")
     p_search.set_defaults(func=cmd_search)
 
-    # create ------------------------------------------------------------------
     p_create = sub.add_parser("create", help="Create a new issue.")
     p_create.add_argument("--project", required=True, help="Project key, e.g. CBRD.")
     p_create.add_argument("--type", required=True, help="Issue type, e.g. Bug, Task.")
@@ -424,7 +472,6 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_write_globals(p_create)
     p_create.set_defaults(func=cmd_create)
 
-    # comment -----------------------------------------------------------------
     p_comment = sub.add_parser("comment", help="Add a comment to an issue.")
     p_comment.add_argument("issue", help="Issue key, e.g. CBRD-12345.")
     p_comment.add_argument("--body-file", required=True, metavar="PATH",
@@ -432,7 +479,6 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_write_globals(p_comment)
     p_comment.set_defaults(func=cmd_comment)
 
-    # link --------------------------------------------------------------------
     p_link = sub.add_parser("link", help="Create a link between two issues.")
     p_link.add_argument("issue", help="Source issue key (inwardIssue).")
     p_link.add_argument("--type", required=True, dest="link_type",
@@ -442,7 +488,6 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_write_globals(p_link)
     p_link.set_defaults(func=cmd_link)
 
-    # transition --------------------------------------------------------------
     p_transition = sub.add_parser(
         "transition",
         help="Transition an issue to another workflow state.",
@@ -455,7 +500,6 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_write_globals(p_transition)
     p_transition.set_defaults(func=cmd_transition)
 
-    # assign ------------------------------------------------------------------
     p_assign = sub.add_parser("assign", help="Set or clear an issue's assignee.")
     p_assign.add_argument("issue", help="Issue key, e.g. CBRD-12345.")
     p_assign.add_argument("--to", required=True,

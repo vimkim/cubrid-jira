@@ -1,15 +1,15 @@
 [project]
-name = "cubrid-jira-fetcher"
-version = "0.2.0"
-description = "Fetch CUBRID JIRA issues (and their related issues) into markdown or JSON, with a cache-first lookup for AI agents. Now with create/comment/link/transition/assign writes."
+name = "cubrid-jira"
+version = "1.0.0"
+description = "CUBRID JIRA CLI: cache-first reads and dry-run-default writes (create / comment / link / transition / assign)."
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = []
 
 [project.scripts]
-cubrid-jira = "cubrid_jira_fetcher.cli:main"
-cubrid-jira-fetch = "cubrid_jira_fetcher.fetcher:main"
-cubrid-jira-search = "cubrid_jira_fetcher.search:main"
+cubrid-jira = "cubrid_jira.cli:main"
+cubrid-jira-fetch = "cubrid_jira.legacy:fetch_main"
+cubrid-jira-search = "cubrid_jira.legacy:search_main"
 
 [dependency-groups]
 dev = [
@@ -21,11 +21,16 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/cubrid_jira_fetcher"]
+packages = ["src/cubrid_jira", "src/cubrid_jira_fetcher"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-q"
+# Skip `live` tests by default — override with `pytest -m live`.
+addopts = "-q -m 'not live'"
 markers = [
     "live: integration tests that hit the real JIRA server (skipped by default)",
+]
+filterwarnings = [
+    # Suppress our own intentional deprecation warning when tests run.
+    "ignore::DeprecationWarning:cubrid_jira_fetcher",
 ]

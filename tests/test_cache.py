@@ -1,6 +1,6 @@
 """Cache helpers: resolve + invalidate."""
 
-from cubrid_jira_fetcher.cache import invalidate, resolve_cache_dir
+from cubrid_jira.cache import invalidate, resolve_cache_dir
 
 
 def test_resolve_cli_arg_wins(monkeypatch, tmp_path):

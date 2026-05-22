@@ -11,7 +11,7 @@ import json
 
 import pytest
 
-from cubrid_jira_fetcher.cli import main
+from cubrid_jira.cli import main
 
 
 # --------------------------------------------------------------------------- #

@@ -2,7 +2,7 @@
 
 import pytest
 
-from cubrid_jira_fetcher.cli import (
+from cubrid_jira.cli import (
     build_assignee_payload,
     build_comment_payload,
     build_create_payload,

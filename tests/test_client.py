@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from cubrid_jira_fetcher.client import JiraClient, basic_auth_header
+from cubrid_jira.http import JiraClient, basic_auth_header
 
 from conftest import make_http_error
 

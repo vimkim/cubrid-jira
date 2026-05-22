@@ -1,35 +1,39 @@
-"""Authenticated HTTP client for CUBRID JIRA Server 7.7.1.
+"""HTTP layer: JiraClient (authenticated mutations) + read helpers.
 
-Uses HTTP Basic auth over plain HTTP (the server is past Atlassian Server EOL
-and only exposes ``/rest/api/2/*``; PATs and Cloud tokens do not exist here).
-
-Notes
------
-* GET requests always execute, even in dry-run mode, because subcommands like
-  ``transition`` need read access to resolve a transition name to its id.
-* Mutating verbs (POST/PUT/DELETE) skip the network in dry-run mode and just
-  print the resolved URL, masked headers, and JSON body.
-* On HTTP 401 we exit hard with a CAPTCHA-lockout warning and never retry —
-  the JIRA Server lockout policy is the reason the writer flow is dry-run by
-  default.
-* 5xx and transient network errors get one retry with a short backoff.
+Layering rule
+-------------
+This module is the ONLY one that talks HTTP. It must not import ``subprocess``
+or anything markdown-related — keep the layers clean so the rendering code
+stays unit-testable without a network stack.
 """
 
 from __future__ import annotations
 
 import base64
 import json
+import re
 import sys
 import time
 import urllib.error
 import urllib.request
 from typing import Any
 
-from cubrid_jira_fetcher.auth import mask_password
+from cubrid_jira.auth import mask_password
+
+JIRA_BASE = "http://jira.cubrid.org"
+REST_API = f"{JIRA_BASE}/rest/api/2/issue"
 
 
 class JiraError(RuntimeError):
     pass
+
+
+def parse_issue_key(arg: str) -> str:
+    """Extract an issue key (e.g. ``CBRD-26463``) from a URL or bare key."""
+    m = re.search(r"([A-Z]+-\d+)", arg)
+    if m:
+        return m.group(1)
+    raise ValueError(f"Cannot parse issue key from: {arg!r}")
 
 
 def basic_auth_header(user: str, password: str) -> str:
@@ -37,7 +41,39 @@ def basic_auth_header(user: str, password: str) -> str:
     return "Basic " + base64.b64encode(raw).decode("ascii")
 
 
+def fetch_issue(key: str) -> dict:
+    """Unauthenticated GET for an issue's full JSON.
+
+    Kept separate from :class:`JiraClient` because the read-only fetch flow
+    must not require credentials — the public CUBRID JIRA happily serves
+    issue JSON without auth.
+    """
+    url = f"{REST_API}/{key}?expand=renderedFields"
+    req = urllib.request.Request(url, headers={"Accept": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            return json.loads(resp.read().decode())
+    except urllib.error.HTTPError as e:
+        print(f"  [HTTP {e.code}] Failed to fetch {key}: {e.reason}", file=sys.stderr)
+        return {}
+    except Exception as e:
+        print(f"  [Error] Failed to fetch {key}: {e}", file=sys.stderr)
+        return {}
+
+
 class JiraClient:
+    """Authenticated client for mutating endpoints + dry-run accounting.
+
+    GET requests always execute, even in dry-run mode, so callers can resolve
+    server state (e.g. a transition name → id) before printing the planned
+    POST. Mutating verbs (POST/PUT/DELETE) are recorded but not sent in
+    dry-run mode.
+
+    The ``recorded_requests`` list captures every dry-run-suppressed
+    mutation as ``{"method", "url", "body"}`` dicts so the CLI can emit a
+    single structured ``--output json`` summary at the end.
+    """
+
     def __init__(
         self,
         server: str,
@@ -45,26 +81,17 @@ class JiraClient:
         password: str,
         dry_run: bool = False,
         timeout: int = 20,
+        output_format: str = "text",
     ) -> None:
         self.server = server.rstrip("/")
         self.user = user
         self.password = password
         self.dry_run = dry_run
         self.timeout = timeout
+        self.output_format = output_format
+        self.recorded_requests: list[dict] = []
 
-    def _real_headers(self) -> dict[str, str]:
-        return {
-            "Authorization": basic_auth_header(self.user, self.password),
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-        }
-
-    def _masked_headers(self) -> dict[str, str]:
-        return {
-            "Authorization": f"Basic <base64({self.user}:{mask_password(self.password)})>",
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-        }
+    # -- public ---------------------------------------------------------- #
 
     def request(
         self,
@@ -81,7 +108,11 @@ class JiraClient:
 
         is_mutation = method.upper() not in ("GET", "HEAD")
         if self.dry_run and is_mutation:
-            self._print_dry_run(method, url, body_str)
+            self.recorded_requests.append(
+                {"method": method.upper(), "url": url, "body": body}
+            )
+            if self.output_format == "text":
+                self._print_dry_run_text(method, url, body_str)
             return None
 
         attempts = 0
@@ -116,6 +147,22 @@ class JiraClient:
                     continue
                 raise JiraError(f"Network error talking to {url}: {reason}") from e
 
+    # -- internals ------------------------------------------------------- #
+
+    def _real_headers(self) -> dict[str, str]:
+        return {
+            "Authorization": basic_auth_header(self.user, self.password),
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        }
+
+    def _masked_headers(self) -> dict[str, str]:
+        return {
+            "Authorization": f"Basic <base64({self.user}:{mask_password(self.password)})>",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        }
+
     def _send(self, method: str, url: str, body_bytes: bytes | None) -> dict:
         req = urllib.request.Request(
             url,
@@ -132,8 +179,13 @@ class JiraClient:
         except (UnicodeDecodeError, json.JSONDecodeError):
             return {"_raw": raw.decode("utf-8", errors="replace")}
 
-    def _print_dry_run(self, method: str, url: str, body_str: str | None) -> None:
-        print("# DRY RUN — no request sent. Add --yes to perform the live write.", file=sys.stderr)
+    def _print_dry_run_text(
+        self, method: str, url: str, body_str: str | None
+    ) -> None:
+        print(
+            "# DRY RUN — no request sent. Add --yes to perform the live write.",
+            file=sys.stderr,
+        )
         print(f"{method.upper()} {url}", file=sys.stderr)
         for k, v in self._masked_headers().items():
             print(f"  {k}: {v}", file=sys.stderr)

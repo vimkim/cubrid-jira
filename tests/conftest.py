@@ -22,7 +22,7 @@ def _stub_credentials(monkeypatch):
 @pytest.fixture(autouse=True)
 def _fast_retries(monkeypatch):
     """Skip the 1.5s backoff inside JiraClient retries so tests run fast."""
-    import cubrid_jira_fetcher.client as client_mod
+    import cubrid_jira.http as client_mod
     monkeypatch.setattr(client_mod.time, "sleep", lambda _s: None)
     yield
 
