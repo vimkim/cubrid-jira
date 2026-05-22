@@ -3,7 +3,7 @@
 A CUBRID JIRA CLI for `http://jira.cubrid.org` with three workflow buckets:
 
 * **cache-first reads** (`search`) — markdown to stdout, no network on a cache hit.
-* **field writes** (`create`, `comment`, `link`, `transition`, `assign`) — dry-run by default; `--yes` to send.
+* **field writes** (`create`, `comment`, `comment-list`, `comment-update`, `comment-delete`, `link`, `transition`, `assign`, `update`) — dry-run by default; `--yes` to send.
 * **structural writes** (`convert-to-issue`, `convert-to-subtask`, `reparent`) — drive the JIRA Convert wizard for the operations REST silently no-ops on; same dry-run contract.
 
 Designed to be driven by AI agents, slash commands, and shell pipelines.
@@ -17,7 +17,8 @@ If you are an autonomous agent running in a shell, this is everything you need:
 ```text
 Canonical command   : cubrid-jira <subcommand> [args…]
 Subcommands         : read              search
-                      field-write       create | comment | link | transition | assign | update
+                      field-write       create | comment | comment-list | comment-update | comment-delete |
+                                        link | transition | assign | update
                       structural-write  convert-to-issue | convert-to-subtask | reparent
 Credentials         : env  CUBRID_JIRA_USER  +  CUBRID_JIRA_PASSWORD
                       (no interactive prompt; falls back to ~/.netrc)
@@ -121,7 +122,7 @@ echo 'export CUBRID_JIRA_DIR="$HOME/.local/share/cubrid-jira/issues"' >> ~/.bash
 
 ---
 
-## Field-write flow — `create / comment / link / transition / assign / update`
+## Field-write flow — `create / comment / comment-list / comment-update / comment-delete / link / transition / assign / update`
 
 These edit fields on an existing or new issue. Same dry-run-by-default contract as the structural writes ([next section](#structural-write-flow--convert--reparent)); pass `--yes` to actually send.
 
@@ -140,6 +141,9 @@ cubrid-jira create     --project CBRD --type Bug --summary "..." \
                        [--label l1 --label l2] [--component sql] \
                        [--link-relates CBRD-Y] [--link-blocks CBRD-Z]
 cubrid-jira comment    CBRD-XXXXX --body-file note.md
+cubrid-jira comment-list   CBRD-XXXXX [--limit N]                  # list comments (read-only)
+cubrid-jira comment-update CBRD-XXXXX --id <COMMENT-ID> --body-file note.md
+cubrid-jira comment-delete CBRD-XXXXX --id <COMMENT-ID>            # irreversible — prints a one-line warning
 cubrid-jira link       CBRD-A --type Relates --to CBRD-B   # also Blocks | Cloners | Duplicate
 cubrid-jira transition CBRD-A [--to "In Progress"]         # omit --to to list available
 cubrid-jira assign     CBRD-A --to <username>              # --to "" to unassign
@@ -162,7 +166,7 @@ Global flags on every write subcommand:
 ### Cache interaction on writes
 
 - `create` (live): the new issue is fetched and saved into the cache, so `cubrid-jira search NEW-KEY` is an immediate hit.
-- `comment`, `link`, `transition`, `assign`, `update` (live): cached markdown for the affected issue key(s) is **deleted**, so the next read re-fetches. `link` invalidates both sides.
+- `comment`, `comment-update`, `comment-delete`, `link`, `transition`, `assign`, `update` (live): cached markdown for the affected issue key(s) is **deleted**, so the next read re-fetches. `link` invalidates both sides. `comment-list` is read-only and never invalidates.
 
 ---
 
@@ -250,6 +254,9 @@ Exactly **one** JSON object on stdout, nothing else. Status/errors still go to s
 |---|---|---|
 | `create` | `{"key": "CBRD-9999", "url": "..."}` | `{"dry_run": true, "requests": [POST issue, POST issueLink, …]}` |
 | `comment` | `{"issue": "CBRD-1", "comment_id": "42"}` | `{"dry_run": true, "requests": [POST .../comment]}` |
+| `comment-list` | `{"issue": "CBRD-1", "total": N, "comments": [...]}` | (same — listing is a GET) |
+| `comment-update` | `{"issue": "CBRD-1", "comment_id": "42", "updated": true}` | `{"dry_run": true, "requests": [PUT .../comment/42]}` |
+| `comment-delete` | `{"issue": "CBRD-1", "comment_id": "42", "deleted": true}` | `{"dry_run": true, "requests": [DELETE .../comment/42]}` |
 | `link` | `{"inward": "CBRD-1", "outward": "CBRD-2", "type": "Relates"}` | `{"dry_run": true, "requests": [POST issueLink]}` |
 | `transition` (with `--to`) | `{"issue": "CBRD-1", "transition_id": "21", "to": "In Progress"}` | `{"dry_run": true, "requests": [POST transitions]}` |
 | `transition` (list mode) | `{"issue": "CBRD-1", "transitions": [...]}` | (same — listing is a GET) |
@@ -334,6 +341,27 @@ cubrid-jira update CBRD-26517 \
     --yes --output json
 # → {"issue": "CBRD-26517", "updated_fields": ["description", "summary"]}
 ```
+
+### Edit your own comment
+
+```sh
+# 1) Capture the comment ID via comment-list --output json.
+ID=$(cubrid-jira comment-list CBRD-26517 --output json \
+       | jq -r '.comments[] | select(.author=="vimkim") | .id' | tail -1)
+echo "Editing comment $ID"
+
+# 2) Dry-run the edit — review the PUT body.
+echo "updated text" > /tmp/edit.md
+cubrid-jira comment-update CBRD-26517 --id "$ID" --body-file /tmp/edit.md
+# → DRY RUN PUT /rest/api/2/issue/CBRD-26517/comment/$ID  {"body": "updated text\n"}
+
+# 3) Commit. Cache for CBRD-26517 is invalidated, so the next search re-fetches.
+cubrid-jira comment-update CBRD-26517 --id "$ID" --body-file /tmp/edit.md \
+    --yes --output json
+# → {"issue": "CBRD-26517", "comment_id": "$ID", "updated": true}
+```
+
+`comment-delete` follows the same shape; it prints a one-line `# About to DELETE comment ...` warning to stderr in live mode before sending.
 
 ### Move a sub-task to a new parent
 

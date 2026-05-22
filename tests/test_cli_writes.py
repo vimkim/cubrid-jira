@@ -118,6 +118,171 @@ def test_comment_dry_run_keeps_cache(fake_server, tmp_path, monkeypatch):
 
 
 # --------------------------------------------------------------------------- #
+# comment-list / comment-update / comment-delete
+# --------------------------------------------------------------------------- #
+
+def _make_comments(n: int) -> list[dict]:
+    return [
+        {
+            "id": str(1000 + i),
+            "author": {"displayName": f"user{i}"},
+            "created": f"2025-01-0{i + 1}T00:00:00.000+0000",
+            "body": f"body number {i}",
+        }
+        for i in range(n)
+    ]
+
+
+def test_comment_list_returns_text_lines(fake_server, capsys):
+    fake_server.route(
+        "GET", "/rest/api/2/issue/CBRD-5/comment",
+        response={"comments": _make_comments(3), "total": 3},
+    )
+    main(["comment-list", "CBRD-5"])
+    out = capsys.readouterr().out
+    lines = [line for line in out.splitlines() if line.strip()]
+    assert len(lines) == 3
+    for i, line in enumerate(lines):
+        assert str(1000 + i) in line
+        assert f"body number {i}" in line
+
+
+def test_comment_list_text_truncates_long_body(fake_server, capsys):
+    long_body = "x" * 200
+    fake_server.route(
+        "GET", "/rest/api/2/issue/CBRD-5/comment",
+        response={"comments": [{
+            "id": "1001",
+            "author": {"displayName": "u"},
+            "created": "2025-01-01T00:00:00.000+0000",
+            "body": long_body,
+        }], "total": 1},
+    )
+    main(["comment-list", "CBRD-5"])
+    out = capsys.readouterr().out
+    assert "..." in out
+    # The truncated chunk plus the ellipsis means the full 200-char body is NOT on the line.
+    assert long_body not in out
+
+
+def test_comment_list_json_shape(fake_server, capsys):
+    fake_server.route(
+        "GET", "/rest/api/2/issue/CBRD-5/comment",
+        response={"comments": _make_comments(3), "total": 3},
+    )
+    main(["comment-list", "CBRD-5", "--output", "json"])
+    out = capsys.readouterr().out.strip()
+    body = json.loads(out)
+    assert body["issue"] == "CBRD-5"
+    assert body["total"] == 3
+    assert len(body["comments"]) == 3
+    # Full bodies preserved in JSON mode — agents need them.
+    assert body["comments"][0]["body"] == "body number 0"
+    assert body["comments"][0]["id"] == "1000"
+    assert body["comments"][0]["author"] == "user0"
+    assert body["comments"][0]["created"].startswith("2025-")
+
+
+def test_comment_list_limit_keeps_most_recent(fake_server, capsys):
+    fake_server.route(
+        "GET", "/rest/api/2/issue/CBRD-5/comment",
+        response={"comments": _make_comments(5), "total": 5},
+    )
+    main(["comment-list", "CBRD-5", "--limit", "2", "--output", "json"])
+    body = json.loads(capsys.readouterr().out.strip())
+    # Oldest-first input -> last 2 are the most recent.
+    assert [c["id"] for c in body["comments"]] == ["1003", "1004"]
+    # total is the server-reported total, NOT the limited count.
+    assert body["total"] == 5
+
+
+def test_comment_update_invalidates_cache_after_live_put(
+    fake_server, tmp_path, monkeypatch
+):
+    monkeypatch.setenv("CUBRID_JIRA_DIR", str(tmp_path))
+    (tmp_path / "CBRD-5.md").write_text("stale cache")
+    fake_server.route(
+        "PUT", "/rest/api/2/issue/CBRD-5/comment/1001",
+        response={"id": "1001", "body": "updated"},
+    )
+
+    body_file = tmp_path / "newbody.md"
+    body_file.write_text("edited comment body")
+
+    main([
+        "comment-update", "CBRD-5",
+        "--id", "1001",
+        "--body-file", str(body_file),
+        "--yes",
+    ])
+
+    assert not (tmp_path / "CBRD-5.md").exists()
+    rec = fake_server.requests[0]
+    assert rec.method == "PUT"
+    assert rec.url.endswith("/rest/api/2/issue/CBRD-5/comment/1001")
+    assert json.loads(rec.body.decode()) == {"body": "edited comment body"}
+
+
+def test_comment_update_dry_run_keeps_cache(fake_server, tmp_path, monkeypatch):
+    monkeypatch.setenv("CUBRID_JIRA_DIR", str(tmp_path))
+    (tmp_path / "CBRD-5.md").write_text("still here")
+    body_file = tmp_path / "newbody.md"
+    body_file.write_text("dry-run edit")
+    main([
+        "comment-update", "CBRD-5",
+        "--id", "1001",
+        "--body-file", str(body_file),
+    ])
+    assert (tmp_path / "CBRD-5.md").exists()
+    assert fake_server.requests == []
+
+
+def test_comment_delete_invalidates_cache_after_live(
+    fake_server, tmp_path, monkeypatch
+):
+    monkeypatch.setenv("CUBRID_JIRA_DIR", str(tmp_path))
+    (tmp_path / "CBRD-5.md").write_text("stale cache")
+    fake_server.route(
+        "DELETE", "/rest/api/2/issue/CBRD-5/comment/1001",
+        response=None,  # 204 No Content
+    )
+
+    main([
+        "comment-delete", "CBRD-5",
+        "--id", "1001",
+        "--yes",
+    ])
+
+    assert not (tmp_path / "CBRD-5.md").exists()
+    rec = fake_server.requests[0]
+    assert rec.method == "DELETE"
+    assert rec.url.endswith("/rest/api/2/issue/CBRD-5/comment/1001")
+
+
+def test_comment_delete_dry_run_does_not_send(fake_server, tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("CUBRID_JIRA_DIR", str(tmp_path))
+    (tmp_path / "CBRD-5.md").write_text("still here")
+    main(["comment-delete", "CBRD-5", "--id", "1001"])
+    assert fake_server.requests == []
+    assert (tmp_path / "CBRD-5.md").exists()
+    err = capsys.readouterr().err
+    assert "DRY RUN" in err
+
+
+def test_comment_delete_prints_warning_before_yes(
+    fake_server, tmp_path, monkeypatch, capsys
+):
+    monkeypatch.setenv("CUBRID_JIRA_DIR", str(tmp_path))
+    fake_server.route(
+        "DELETE", "/rest/api/2/issue/CBRD-5/comment/1001",
+        response=None,
+    )
+    main(["comment-delete", "CBRD-5", "--id", "1001", "--yes"])
+    err = capsys.readouterr().err
+    assert "About to DELETE comment 1001 on CBRD-5" in err
+
+
+# --------------------------------------------------------------------------- #
 # link
 # --------------------------------------------------------------------------- #
 

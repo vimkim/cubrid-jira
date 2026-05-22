@@ -3,7 +3,7 @@
 ```text
 canonical binary    cubrid-jira <subcommand> [args…]
 read                search
-field-write         create | comment | link | transition | assign | update
+field-write         create | comment | comment-list | comment-update | comment-delete | link | transition | assign | update
 structural-write    convert-to-issue | convert-to-subtask | reparent
 credentials         env CUBRID_JIRA_USER + CUBRID_JIRA_PASSWORD
                     (no interactive prompt; falls back to ~/.netrc)

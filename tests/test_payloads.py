@@ -5,6 +5,7 @@ import pytest
 from cubrid_jira.cli import (
     build_assignee_payload,
     build_comment_payload,
+    build_comment_update_payload,
     build_create_payload,
     build_link_payload,
     build_transition_payload,
@@ -54,6 +55,10 @@ def test_link_payload_shape():
 
 def test_comment_payload():
     assert build_comment_payload("note") == {"body": "note"}
+
+
+def test_comment_update_payload():
+    assert build_comment_update_payload("new body") == {"body": "new body"}
 
 
 def test_transition_payload_uses_id():

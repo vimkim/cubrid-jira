@@ -116,6 +116,13 @@ def build_comment_payload(body: str) -> dict:
     return {"body": body}
 
 
+def build_comment_update_payload(body: str) -> dict:
+    # Identical to build_comment_payload today. Kept separate so future
+    # divergence (e.g. an edit-only `visibility` field) doesn't require
+    # renaming callers.
+    return {"body": body}
+
+
 def build_transition_payload(transition_id: str) -> dict:
     return {"transition": {"id": transition_id}}
 
@@ -333,6 +340,110 @@ def cmd_comment(args) -> None:
     live_result = {"issue": key, "comment_id": (resp or {}).get("id")}
     if _output_format(args) == "text":
         print(f"Commented on {key}; cache entry invalidated.", file=sys.stderr)
+    _emit(args, client, live_result)
+
+
+# --------------------------------------------------------------------------- #
+# comment-list / comment-update / comment-delete
+# --------------------------------------------------------------------------- #
+
+def _format_comment_line(c: dict) -> str:
+    cid = c.get("id", "?")
+    author = (c.get("author") or {}).get("displayName") or "(unknown)"
+    created = c.get("created", "?")
+    body = (c.get("body") or "").replace("\n", " ")
+    if len(body) > 80:
+        body = body[:80] + "..."
+    return f"{cid} | {author} | {created} | {body}"
+
+
+def cmd_comment_list(args) -> None:
+    key = parse_issue_key(args.issue)
+    client = _make_client(args)
+    resp = client.request("GET", f"/rest/api/2/issue/{key}/comment") or {}
+    comments = resp.get("comments") or []
+    total = resp.get("total", len(comments))
+
+    limit = args.limit
+    if limit is not None and limit >= 0 and len(comments) > limit:
+        # Jira returns oldest-first; "most recent" means the tail.
+        comments = comments[-limit:]
+
+    if _output_format(args) == "json":
+        out = {
+            "issue": key,
+            "total": total,
+            "comments": [
+                {
+                    "id": c.get("id"),
+                    "author": (c.get("author") or {}).get("displayName"),
+                    "created": c.get("created"),
+                    "body": c.get("body", ""),
+                }
+                for c in comments
+            ],
+        }
+        print(json.dumps(out, ensure_ascii=False))
+        return
+
+    for c in comments:
+        print(_format_comment_line(c))
+
+
+def cmd_comment_update(args) -> None:
+    key = parse_issue_key(args.issue)
+    if args.body_file == "-":
+        body_text = sys.stdin.read()
+    else:
+        body_text = Path(args.body_file).read_text(encoding="utf-8")
+
+    client = _make_client(args)
+    client.request(
+        "PUT",
+        f"/rest/api/2/issue/{key}/comment/{args.id}",
+        body=build_comment_update_payload(body_text),
+    )
+
+    if _is_dry_run(args):
+        _emit(args, client, None)
+        return
+
+    cache_dir = resolve_cache_dir(args.dir)
+    invalidate(key, cache_dir)
+    live_result = {"issue": key, "comment_id": args.id, "updated": True}
+    if _output_format(args) == "text":
+        print(
+            f"Updated comment {args.id} on {key}; cache entry invalidated.",
+            file=sys.stderr,
+        )
+    _emit(args, client, live_result)
+
+
+def cmd_comment_delete(args) -> None:
+    key = parse_issue_key(args.issue)
+
+    if not _is_dry_run(args):
+        # Irreversible — print a one-line informational warning before sending.
+        print(
+            f"# About to DELETE comment {args.id} on {key}.",
+            file=sys.stderr,
+        )
+
+    client = _make_client(args)
+    client.request("DELETE", f"/rest/api/2/issue/{key}/comment/{args.id}")
+
+    if _is_dry_run(args):
+        _emit(args, client, None)
+        return
+
+    cache_dir = resolve_cache_dir(args.dir)
+    invalidate(key, cache_dir)
+    live_result = {"issue": key, "comment_id": args.id, "deleted": True}
+    if _output_format(args) == "text":
+        print(
+            f"Deleted comment {args.id} on {key}; cache entry invalidated.",
+            file=sys.stderr,
+        )
     _emit(args, client, live_result)
 
 
@@ -982,6 +1093,47 @@ def _build_parser() -> argparse.ArgumentParser:
                            help="File whose contents become the comment body.")
     _add_write_globals(p_comment)
     p_comment.set_defaults(func=cmd_comment)
+
+    p_comment_list = sub.add_parser(
+        "comment-list",
+        help="List comments on an issue (read-only; always hits the network).",
+    )
+    p_comment_list.add_argument("issue", help="Issue key, e.g. CBRD-12345.")
+    p_comment_list.add_argument(
+        "--limit", type=int, default=50, metavar="N",
+        help="Keep only the N most recent comments (default 50). "
+             "Pass 0 for no limit.",
+    )
+    _add_write_globals(p_comment_list)
+    p_comment_list.set_defaults(func=cmd_comment_list)
+
+    p_comment_update = sub.add_parser(
+        "comment-update",
+        help="Edit an existing comment on an issue.",
+    )
+    p_comment_update.add_argument("issue", help="Issue key, e.g. CBRD-12345.")
+    p_comment_update.add_argument(
+        "--id", required=True, metavar="COMMENT-ID",
+        help="Comment ID to update (capture via `comment-list --output json`).",
+    )
+    p_comment_update.add_argument(
+        "--body-file", required=True, metavar="PATH",
+        help="File whose contents become the new comment body; '-' reads stdin.",
+    )
+    _add_write_globals(p_comment_update)
+    p_comment_update.set_defaults(func=cmd_comment_update)
+
+    p_comment_delete = sub.add_parser(
+        "comment-delete",
+        help="Delete a comment on an issue (irreversible).",
+    )
+    p_comment_delete.add_argument("issue", help="Issue key, e.g. CBRD-12345.")
+    p_comment_delete.add_argument(
+        "--id", required=True, metavar="COMMENT-ID",
+        help="Comment ID to delete (capture via `comment-list --output json`).",
+    )
+    _add_write_globals(p_comment_delete)
+    p_comment_delete.set_defaults(func=cmd_comment_delete)
 
     p_link = sub.add_parser("link", help="Create a link between two issues.")
     p_link.add_argument("issue", help="Source issue key (inwardIssue).")

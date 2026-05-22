@@ -171,3 +171,82 @@ def test_transition_list_json(fake_server, capsys):
     out = _sole_stdout_json(capsys)
     assert out["issue"] == "CBRD-7"
     assert out["transitions"] == [{"id": "11", "name": "Open"}]
+
+
+# --------------------------------------------------------------------------- #
+# comment-list / comment-update / comment-delete
+# --------------------------------------------------------------------------- #
+
+def test_comment_list_live_json_shape(fake_server, capsys):
+    fake_server.route(
+        "GET", "/rest/api/2/issue/CBRD-5/comment",
+        response={
+            "comments": [{
+                "id": "1001",
+                "author": {"displayName": "vimkim"},
+                "created": "2025-01-02T11:22:33.000+0000",
+                "body": "hello",
+            }],
+            "total": 1,
+        },
+    )
+    main(["comment-list", "CBRD-5", "--output", "json"])
+    body = _sole_stdout_json(capsys)
+    assert body["issue"] == "CBRD-5"
+    assert body["total"] == 1
+    assert body["comments"] == [{
+        "id": "1001",
+        "author": "vimkim",
+        "created": "2025-01-02T11:22:33.000+0000",
+        "body": "hello",
+    }]
+
+
+def test_comment_update_live_json_shape(fake_server, tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("CUBRID_JIRA_DIR", str(tmp_path))
+    fake_server.route(
+        "PUT", "/rest/api/2/issue/CBRD-5/comment/1001",
+        response={"id": "1001", "body": "edited"},
+    )
+    body_file = tmp_path / "b.md"
+    body_file.write_text("edited")
+    main([
+        "comment-update", "CBRD-5",
+        "--id", "1001",
+        "--body-file", str(body_file),
+        "--yes", "--output", "json",
+    ])
+    assert _sole_stdout_json(capsys) == {
+        "issue": "CBRD-5", "comment_id": "1001", "updated": True,
+    }
+
+
+def test_comment_delete_live_json_shape(fake_server, tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("CUBRID_JIRA_DIR", str(tmp_path))
+    fake_server.route(
+        "DELETE", "/rest/api/2/issue/CBRD-5/comment/1001",
+        response=None,
+    )
+    main([
+        "comment-delete", "CBRD-5",
+        "--id", "1001",
+        "--yes", "--output", "json",
+    ])
+    assert _sole_stdout_json(capsys) == {
+        "issue": "CBRD-5", "comment_id": "1001", "deleted": True,
+    }
+
+
+def test_comment_delete_dry_run_json_captures_plan(fake_server, capsys):
+    main([
+        "comment-delete", "CBRD-5",
+        "--id", "1001",
+        "--output", "json",
+    ])
+    plan = _sole_stdout_json(capsys)
+    assert plan["dry_run"] is True
+    assert len(plan["requests"]) == 1
+    req = plan["requests"][0]
+    assert req["method"] == "DELETE"
+    assert req["url"].endswith("/rest/api/2/issue/CBRD-5/comment/1001")
+    assert fake_server.requests == []
