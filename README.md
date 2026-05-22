@@ -1,8 +1,12 @@
 # cubrid-jira
 
-A CUBRID JIRA CLI: **cache-first reads** and **dry-run-default writes** against `http://jira.cubrid.org`. Designed to be driven by AI agents, slash commands, and shell pipelines.
+A CUBRID JIRA CLI for `http://jira.cubrid.org` with three workflow buckets:
 
-> Renamed from `cubrid-jira-fetcher` in v1.0. The old `cubrid-jira-search` and `cubrid-jira-fetch` binaries still work but emit a deprecation notice.
+* **cache-first reads** (`search`) — markdown to stdout, no network on a cache hit.
+* **field writes** (`create`, `comment`, `link`, `transition`, `assign`) — dry-run by default; `--yes` to send.
+* **structural writes** (`convert-to-issue`, `convert-to-subtask`, `reparent`) — drive the JIRA Convert wizard for the operations REST silently no-ops on; same dry-run contract.
+
+Designed to be driven by AI agents, slash commands, and shell pipelines.
 
 ---
 
@@ -12,8 +16,9 @@ If you are an autonomous agent running in a shell, this is everything you need:
 
 ```text
 Canonical command   : cubrid-jira <subcommand> [args…]
-Subcommands         : search | create | comment | link | transition | assign
-                      | convert-to-issue | convert-to-subtask | reparent
+Subcommands         : read              search
+                      field-write       create | comment | link | transition | assign
+                      structural-write  convert-to-issue | convert-to-subtask | reparent
 Credentials         : env  CUBRID_JIRA_USER  +  CUBRID_JIRA_PASSWORD
                       (no interactive prompt; falls back to ~/.netrc)
 Output contract     : markdown / JSON   → stdout
@@ -22,14 +27,16 @@ Output contract     : markdown / JSON   → stdout
 Machine-readable    : add `--output json` to any write subcommand;
                       stdout becomes exactly one JSON object.
 Dry-run is default  : ALL writes are dry-run unless you pass `--yes`.
+                      This includes the structural writes.
 CAPTCHA lockout     : on HTTP 401 the tool exits 2 immediately and does
                       NOT retry. Jira Server locks the account and
                       forces a web-UI CAPTCHA after repeated failures.
 Exit codes          : 0 ok | 1 generic | 2 401 | 3 403 | 4 404 | 5 400
+                      (see "Error contract" below for what they mean)
 ```
 
 `cubrid-jira search CBRD-XXXXX` is the agent-friendly read; use it freely.
-Any of the write subcommands without `--yes` is **safe to invoke** — it only prints the planned request.
+Any write subcommand without `--yes` is **safe to invoke** — it only prints the planned request.
 
 ---
 
@@ -42,6 +49,8 @@ Any of the write subcommands without `--yes` is **safe to invoke** — it only p
 ## Install
 
 `uv tool install` is the right tool: isolated env, binary on `$PATH`, easy uninstall. `pipx` is an equivalent fallback.
+
+> The GitHub repo is still called `cubrid-jira-fetcher` (its v0 name). The package, the canonical binary, and all new code are `cubrid-jira`.
 
 ```sh
 # Recommended:
@@ -60,7 +69,7 @@ Installs three binaries on `$PATH`:
 |---|---|
 | `cubrid-jira` | **canonical** — use this |
 | `cubrid-jira-search` | deprecated alias for `cubrid-jira search` |
-| `cubrid-jira-fetch` | deprecated bulk-fetch tool (was `cubrid-jira-fetcher`'s original entry point) |
+| `cubrid-jira-fetch` | deprecated bulk-fetch tool — the original CLI before the v1.0 rename |
 
 > Do **not** use `pip install -e .` to install — that mode is only for editing this repo's source.
 
@@ -114,9 +123,9 @@ echo 'export CUBRID_JIRA_DIR="$HOME/.local/share/cubrid-jira/issues"' >> ~/.bash
 
 ---
 
-## Write flow — `create / comment / link / transition / assign`
+## Field-write flow — `create / comment / link / transition / assign`
 
-All write subcommands are **dry-run by default**; you must pass `--yes` to actually send.
+These edit fields on an existing or new issue. Same dry-run-by-default contract as the structural writes ([next section](#structural-write-flow--convert--reparent)); pass `--yes` to actually send.
 
 ```sh
 # Read first — review the planned request:
@@ -153,24 +162,11 @@ Global flags on every write subcommand:
 - `create` (live): the new issue is fetched and saved into the cache, so `cubrid-jira search NEW-KEY` is an immediate hit.
 - `comment`, `link`, `transition`, `assign` (live): cached markdown for the affected issue key(s) is **deleted**, so the next read re-fetches. `link` invalidates both sides.
 
-### Error contract
-
-| Exit | Cause |
-|---|---|
-| 0 | Success (or dry-run completed). |
-| 1 | Generic error: parse failure, network exhaustion, unknown link type. |
-| 2 | **HTTP 401 — auth failed.** Hard exit, no retry. CAPTCHA-lockout warning printed. |
-| 3 | HTTP 403 — authenticated but missing permission. |
-| 4 | HTTP 404 — issue key not found. |
-| 5 | HTTP 400 — validation; server's `errors` / `errorMessages` payload printed verbatim. |
-
-5xx and transient network errors get one short retry with backoff, then exit 1.
-
 ---
 
-## Reparent / Convert
+## Structural-write flow — `convert-to-issue / convert-to-subtask / reparent`
 
-Three additional subcommands change the **structural type** of an issue rather than editing its fields:
+Three subcommands change the **structural type** of an issue rather than editing its fields:
 
 ```sh
 cubrid-jira convert-to-issue   CBRD-XXXXX [--type Task]                 # Sub-task → Task (drops parent)
@@ -204,18 +200,35 @@ Full technical rationale, the trap list (8 of them), and a curl-only smoke test 
 
 ### Issuetype IDs are resolved at runtime
 
-The numeric issuetype IDs on this server happen to be `5` (Sub-task) and `10500` (Task) — but those vary per JIRA install. None of the three subcommands hard-codes them; each parses the `<select name="issuetype">` block from the wizard page on every live run and matches by display name. If you point `--server` at a different JIRA Server you get the right IDs automatically.
+Numeric issuetype IDs (Sub-task, Task, Bug, …) vary per JIRA install. None of the three subcommands hard-codes them; each parses the `<select name="issuetype">` block from the wizard page on every live run and matches by display name. Pointing `--server` at a different JIRA Server picks up that server's IDs automatically.
 
 ### Dry-run safety
 
 Like every other write subcommand, all three default to **dry-run**. Without `--yes` they:
 
-1. Fetch the issue's current metadata (unauthenticated read).
+1. Fetch the issue's current metadata over the same unauthenticated REST endpoint `search` uses.
 2. Run the pre-flight refusals.
 3. Print the planned wizard POSTs with `atl_token=<extracted-at-runtime>`, `guid=<extracted-at-runtime>`, and `issuetype=<resolved-at-runtime>` placeholders.
-4. Never log in, never contact the wizard endpoints.
+4. Never log in, never contact the wizard endpoints, never touch credentials.
 
-So `cubrid-jira reparent CBRD-1 --to CBRD-2` is safe to run as a preview at any time — it touches the same unauthenticated `/rest/api/2/issue/...` endpoint `search` uses.
+So `cubrid-jira reparent CBRD-1 --to CBRD-2` is safe to run as a preview any time, even without creds set.
+
+---
+
+## Error contract
+
+Applies to every subcommand — read, field-write, and structural-write alike. 401 in particular can fire on a wizard step, not just on the field-write POST.
+
+| Exit | Cause |
+|---|---|
+| 0 | Success (or dry-run completed). |
+| 1 | Generic error: parse failure, network exhaustion, unknown link type, atomicity rollback warning on `reparent`, … |
+| 2 | **HTTP 401 — auth failed.** Hard exit, no retry. CAPTCHA-lockout warning printed; the wizard's session login surfaces 401 the same way. |
+| 3 | HTTP 403 — authenticated but missing permission. |
+| 4 | HTTP 404 — issue key not found. |
+| 5 | HTTP 400 — validation; server's `errors` / `errorMessages` payload printed verbatim. |
+
+5xx and transient network errors get one short retry with backoff, then exit 1. Wizard XSRF rejections (atl_token went stale mid-flow) exit 1 with a message naming the failing step.
 
 ---
 
@@ -275,7 +288,9 @@ chmod 600 ~/.netrc
 
 ---
 
-## Worked example — create a bug related to `CBRD-26517`
+## Worked examples
+
+### Create a bug related to `CBRD-26517`
 
 ```sh
 # 1) Dry-run JSON plan — review what would be sent.
@@ -302,24 +317,41 @@ echo "Created $KEY"
 cubrid-jira search "$KEY"   # immediate cache hit, no extra fetch
 ```
 
+### Move a sub-task to a new parent
+
+```sh
+# 1) Preview the 6-POST wizard plan (no credentials needed).
+cubrid-jira reparent CBRD-26660 --to CBRD-26835 --output json
+# → {"dry_run": true, "requests": [...3 forward POSTs..., ...3 reverse POSTs...]}
+
+# 2) Commit. Same call, plus --yes.
+cubrid-jira reparent CBRD-26660 --to CBRD-26835 --yes
+# Reparented CBRD-26660: CBRD-26583 -> CBRD-26835; cache invalidated for all three keys.
+```
+
+If the reverse half fails after the forward half succeeded, `reparent` prints the recovery command and exits 1 — it never silently leaves the issue stranded. See **Atomicity on `reparent`** above.
+
 ---
 
 ## Caching behavior
 
-`cubrid-jira search` and the legacy `cubrid-jira-fetch` bulk tool share the same on-disk cache. Already-saved files are skipped on subsequent runs; related issues are still traversed so a later `--depth 2` run correctly extends a prior `--depth 1` run. Use `--force` to re-download.
+The cache directory is shared by `cubrid-jira search` and the legacy `cubrid-jira-fetch` bulk tool. Both honour the same precedence (`--dir`, `$CUBRID_JIRA_DIR`, default). A markdown file written by one is served immediately by the other.
 
-A markdown file written by `cubrid-jira-fetch` is served immediately by `cubrid-jira search` (and vice-versa) when both point at the same directory.
+- `cubrid-jira search KEY` — cache hit prints from disk with no network; cache miss fetches one issue plus one level of related issues (`--no-recurse` disables the walk).
+- `cubrid-jira-fetch KEY --depth N` *(deprecated)* — bulk-fetch a transitive closure up to depth `N`. Already-saved files are skipped, so a later `--depth 2` run extends a prior `--depth 1` run; pass `--force` to re-download.
+- Field-write commands invalidate the affected key(s) (`link` invalidates both sides); structural-write commands invalidate 2–3 keys per the table above.
 
 ---
 
 ## Development
 
 ```sh
+# The repo on GitHub kept its v0 name; the package and binary are `cubrid-jira`.
 git clone https://github.com/vimkim/cubrid-jira-fetcher.git
 cd cubrid-jira-fetcher
 uv sync --dev
-uv run pytest                # unit + integration tests (47+ tests, ~0.2s)
-uv run pytest -m live        # also runs the live-server smoke test
+uv run pytest                # ~78 unit + mocked-integration tests in ~0.25s
+uv run pytest -m live        # also hits the real jira.cubrid.org (read-only)
 uv run cubrid-jira search CBRD-1
 ```
 
