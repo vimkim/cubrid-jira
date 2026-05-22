@@ -13,6 +13,7 @@ If you are an autonomous agent running in a shell, this is everything you need:
 ```text
 Canonical command   : cubrid-jira <subcommand> [args…]
 Subcommands         : search | create | comment | link | transition | assign
+                      | convert-to-issue | convert-to-subtask | reparent
 Credentials         : env  CUBRID_JIRA_USER  +  CUBRID_JIRA_PASSWORD
                       (no interactive prompt; falls back to ~/.netrc)
 Output contract     : markdown / JSON   → stdout
@@ -167,6 +168,57 @@ Global flags on every write subcommand:
 
 ---
 
+## Reparent / Convert
+
+Three additional subcommands change the **structural type** of an issue rather than editing its fields:
+
+```sh
+cubrid-jira convert-to-issue   CBRD-XXXXX [--type Task]                 # Sub-task → Task (drops parent)
+cubrid-jira convert-to-subtask CBRD-XXXXX --to CBRD-YYYYY               # Task → Sub-task of YYYYY
+cubrid-jira reparent           CBRD-XXXXX --to CBRD-YYYYY               # move a Sub-task under YYYYY
+```
+
+`reparent` composes the other two for the common case of changing a sub-task's parent.
+
+### Why these aren't just a REST `PUT`
+
+On `jira.cubrid.org` (JIRA Server 7.7.1), `PUT /rest/api/2/issue/{KEY}` with `{"fields":{"parent":{"key":"X"}}}` **returns HTTP 204 but does not mutate the parent field** — the CBRD project's Field Configuration Scheme doesn't put `parent` on the Sub-task Edit screen, so the API silently strips it. These three subcommands drive the same **Convert wizard** the web UI uses (`/secure/ConvertSubTask.jspa` and `/secure/ConvertIssue.jspa`) via session cookies and form POSTs, including the `X-Atlassian-Token: no-check` header required to bypass JIRA's XSRF gate on non-browser clients.
+
+Full technical rationale, the trap list (8 of them), and a curl-only smoke test recipe live in [`docs/reparent-subtasks-via-convert-wizard.md`](./docs/reparent-subtasks-via-convert-wizard.md).
+
+### What they do
+
+| Subcommand | Pre-flight | Cache invalidates | Notes |
+|---|---|---|---|
+| `convert-to-issue` | refuses if not Sub-task | issue + previous parent | Drops the parent; default `--type Task`. |
+| `convert-to-subtask` | refuses if already Sub-task, or if `--to` is itself a Sub-task | issue + new parent | Default `--type Sub-task`. |
+| `reparent` | refuses if not Sub-task, if `--to` equals current parent, or if `--to` is a Sub-task | issue + old parent + new parent | Two-phase: Sub-task → Task, then Task → Sub-task. |
+
+### Atomicity on `reparent`
+
+`reparent` runs the forward wizard (Sub-task → Task), verifies the intermediate state, **then** runs the reverse wizard (Task → Sub-task under `--to`). If the reverse half fails after the forward half succeeded, the issue is left as a Task with no parent — a worse state than it started in. The command does **not** swallow this:
+
+* Prints a loud `!!! ATOMICITY WARNING` to stderr with the exact recovery command (`cubrid-jira convert-to-subtask KEY --to NEW --yes`).
+* Exits non-zero (1).
+* Does **not** invalidate the cache, so the next `search` re-fetches and surfaces the actual state.
+
+### Issuetype IDs are resolved at runtime
+
+The numeric issuetype IDs on this server happen to be `5` (Sub-task) and `10500` (Task) — but those vary per JIRA install. None of the three subcommands hard-codes them; each parses the `<select name="issuetype">` block from the wizard page on every live run and matches by display name. If you point `--server` at a different JIRA Server you get the right IDs automatically.
+
+### Dry-run safety
+
+Like every other write subcommand, all three default to **dry-run**. Without `--yes` they:
+
+1. Fetch the issue's current metadata (unauthenticated read).
+2. Run the pre-flight refusals.
+3. Print the planned wizard POSTs with `atl_token=<extracted-at-runtime>`, `guid=<extracted-at-runtime>`, and `issuetype=<resolved-at-runtime>` placeholders.
+4. Never log in, never contact the wizard endpoints.
+
+So `cubrid-jira reparent CBRD-1 --to CBRD-2` is safe to run as a preview at any time — it touches the same unauthenticated `/rest/api/2/issue/...` endpoint `search` uses.
+
+---
+
 ## Output formats
 
 Every **write** subcommand supports `--output {text,json}`.
@@ -188,6 +240,9 @@ Exactly **one** JSON object on stdout, nothing else. Status/errors still go to s
 | `transition` (list mode) | `{"issue": "CBRD-1", "transitions": [...]}` | (same — listing is a GET) |
 | `assign` (set) | `{"issue": "CBRD-1", "assignee": "vimkim"}` | `{"dry_run": true, "requests": [PUT assignee]}` |
 | `assign` (clear) | `{"issue": "CBRD-1", "assignee": null}` | (same) |
+| `convert-to-issue` | `{"issue": "CBRD-1", "type": "Task", "previous_parent": "CBRD-X"}` | `{"dry_run": true, "requests": [POST step1, step3, step4]}` |
+| `convert-to-subtask` | `{"issue": "CBRD-1", "parent": "CBRD-Y", "type": "Sub-task"}` | `{"dry_run": true, "requests": [POST step1, step3, step4]}` |
+| `reparent` | `{"issue": "CBRD-1", "from_parent": "CBRD-X", "to_parent": "CBRD-Y"}` | `{"dry_run": true, "requests": [6 POSTs: forward + reverse]}` |
 
 The dry-run `requests` field captures **every** mutation the live run would send (so `create --link-relates X --link-blocks Y` returns the 3-request plan), with `method`, `url`, and `body` per request.
 
@@ -280,7 +335,9 @@ just search CBRD-26463
 | File | Role |
 |---|---|
 | `cli.py` | Parent `cubrid-jira` argparse + dispatch. |
-| `http.py` | `JiraClient` (auth, dry-run, retries, 401 hard-fail) + `fetch_issue` read helper. **Layering rule: no `subprocess` imports.** |
+| `http.py` | `JiraClient` (basic-auth, dry-run, retries, 401 hard-fail) + `fetch_issue` read helper. **Layering rule: no `subprocess` imports.** |
+| `session.py` | `SessionClient` for the Convert wizard — manages `JSESSIONID` via `http.cookiejar.CookieJar` and adds `X-Atlassian-Token: no-check` on every mutating POST. Same dry-run semantics as `JiraClient`. **Layering rule: no `subprocess` imports.** |
+| `wizard.py` | Pure HTML parsing (`atl_token` / `guid` / `<select name="issuetype">` extraction, XSRF-rejection detection) + payload builders for the six wizard form POSTs. **Layering rule: no `urllib` imports.** |
 | `markdown.py` | Pure rendering (Jira wiki → markdown via pandoc) and `extract_related_keys`. **Layering rule: no `urllib` imports.** |
 | `walk.py` | Recursive related-issue walking + on-disk cache writes. |
 | `auth.py` | Credential resolution: env → netrc → error. |

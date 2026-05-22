@@ -68,8 +68,12 @@ class FakeJiraServer:
         method = req.get_method().upper()
         url = req.full_url
         body = req.data
+        # CookieJar.add_cookie_header() writes Cookie to unredirected_hdrs,
+        # not headers — merge both so tests can assert cookie continuity.
+        merged = dict(req.headers)
+        merged.update(req.unredirected_hdrs)
         self.requests.append(
-            RecordedRequest(method=method, url=url, headers=dict(req.headers), body=body)
+            RecordedRequest(method=method, url=url, headers=merged, body=body)
         )
         for r_method, suffix, response, raise_, status in self.routes:
             if r_method != method:

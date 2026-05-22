@@ -25,10 +25,26 @@ from pathlib import Path
 from cubrid_jira.auth import resolve_credentials
 from cubrid_jira.cache import invalidate, resolve_cache_dir
 from cubrid_jira.http import JiraClient, fetch_issue, parse_issue_key
+from cubrid_jira.session import SessionClient
 from cubrid_jira.walk import fetch_recursive, save_issue
+from cubrid_jira.wizard import (
+    ISSUE_WIZARD,
+    SUBTASK_WIZARD,
+    build_issue_step1,
+    build_issue_step3,
+    build_issue_step4,
+    build_subtask_step1,
+    build_subtask_step3,
+    build_subtask_step4,
+    check_xsrf,
+    parse_form,
+    resolve_issuetype_id,
+)
 
 DEFAULT_SERVER = "http://jira.cubrid.org"
 ALLOWED_LINK_TYPES = ("Blocks", "Cloners", "Duplicate", "Relates")
+DRY_RUN_TOKEN_PLACEHOLDER = "<extracted-at-runtime>"
+DRY_RUN_ISSUETYPE_PLACEHOLDER = "<resolved-at-runtime>"
 
 
 # --------------------------------------------------------------------------- #
@@ -120,6 +136,17 @@ def _output_format(args) -> str:
 def _make_client(args) -> JiraClient:
     user, pw = resolve_credentials(args.server)
     return JiraClient(
+        args.server,
+        user,
+        pw,
+        dry_run=_is_dry_run(args),
+        output_format=_output_format(args),
+    )
+
+
+def _make_session(args) -> SessionClient:
+    user, pw = resolve_credentials(args.server)
+    return SessionClient(
         args.server,
         user,
         pw,
@@ -389,6 +416,411 @@ def cmd_assign(args) -> None:
 
 
 # --------------------------------------------------------------------------- #
+# convert-to-issue / convert-to-subtask / reparent
+# --------------------------------------------------------------------------- #
+#
+# All three subcommands drive the JIRA Server Convert wizard, because
+# PUT /rest/api/2/issue/{KEY} silently no-ops on the parent field for this
+# server's Field Configuration Scheme. Full rationale + traps:
+#   docs/reparent-subtasks-via-convert-wizard.md
+
+def _refresh_form(
+    html: str,
+    fallback_token: str,
+    fallback_guid: str,
+) -> tuple[str, str]:
+    """Re-extract ``atl_token``/``guid`` from a wizard step's response HTML.
+
+    Stale tokens give the same XSRF rejection as missing ones, so we always
+    re-parse. In dry-run mode ``html`` is empty and we keep the placeholders.
+    """
+    form = parse_form(html)
+    return (
+        form["atl_token"] or fallback_token,
+        form["guid"] or fallback_guid,
+    )
+
+
+def _drive_subtask_to_task(
+    session: SessionClient,
+    issue_id: str,
+    atl_token: str,
+    guid: str,
+    issuetype_id: str,
+) -> None:
+    """Run wizard steps 1, 3, 4 of ConvertSubTask (Step 2 skipped for Task)."""
+    html = session.html_post(
+        SUBTASK_WIZARD["step1"],
+        build_subtask_step1(issue_id, atl_token, guid, issuetype_id),
+    )
+    check_xsrf(html)
+    atl_token, guid = _refresh_form(html, atl_token, guid)
+
+    html = session.html_post(
+        SUBTASK_WIZARD["step3"],
+        build_subtask_step3(issue_id, atl_token, guid),
+    )
+    check_xsrf(html)
+    atl_token, guid = _refresh_form(html, atl_token, guid)
+
+    html = session.html_post(
+        SUBTASK_WIZARD["step4"],
+        build_subtask_step4(issue_id, atl_token, guid),
+    )
+    check_xsrf(html)
+
+
+def _drive_task_to_subtask(
+    session: SessionClient,
+    issue_id: str,
+    atl_token: str,
+    guid: str,
+    issuetype_id: str,
+    parent_key: str,
+) -> None:
+    """Run wizard steps 1, 3, 4 of ConvertIssue (Step 2 skipped)."""
+    html = session.html_post(
+        ISSUE_WIZARD["step1"],
+        build_issue_step1(issue_id, atl_token, guid, issuetype_id, parent_key),
+    )
+    check_xsrf(html)
+    atl_token, guid = _refresh_form(html, atl_token, guid)
+
+    html = session.html_post(
+        ISSUE_WIZARD["step3"],
+        build_issue_step3(issue_id, atl_token, guid),
+    )
+    check_xsrf(html)
+    atl_token, guid = _refresh_form(html, atl_token, guid)
+
+    html = session.html_post(
+        ISSUE_WIZARD["step4"],
+        build_issue_step4(issue_id, atl_token, guid),
+    )
+    check_xsrf(html)
+
+
+def _fetch_meta(key: str) -> tuple[str, str, str | None]:
+    """Return ``(issue_id, issuetype_name, parent_key_or_None)`` for ``key``.
+
+    On a fetch failure the helper exits 4 — ``fetch_issue`` already printed
+    the underlying HTTP/network reason to stderr.
+    """
+    data = fetch_issue(key)
+    if not data:
+        sys.exit(4)
+    issue_id = str(data.get("id", ""))
+    fields = data.get("fields") or {}
+    cur_type = (fields.get("issuetype") or {}).get("name") or ""
+    cur_parent = (fields.get("parent") or {}).get("key")
+    return issue_id, cur_type, cur_parent
+
+
+def _require_atl(form: dict[str, str | None], where: str) -> tuple[str, str]:
+    if not form.get("atl_token"):
+        print(
+            f"Error: could not extract atl_token from {where}. Has the wizard "
+            "page shape changed?",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    return form["atl_token"], (form.get("guid") or "")
+
+
+def cmd_convert_to_issue(args) -> None:
+    key = parse_issue_key(args.issue)
+    target_type = args.type or "Task"
+
+    issue_id, cur_type, cur_parent = _fetch_meta(key)
+    if cur_type != "Sub-task":
+        print(
+            f"Error: {key} is currently type={cur_type!r}; convert-to-issue "
+            "requires a Sub-task. (Use 'reparent' to move between parents.)",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    session = _make_session(args)
+
+    if _is_dry_run(args):
+        _drive_subtask_to_task(
+            session,
+            issue_id,
+            DRY_RUN_TOKEN_PLACEHOLDER,
+            DRY_RUN_TOKEN_PLACEHOLDER,
+            DRY_RUN_ISSUETYPE_PLACEHOLDER,
+        )
+        _emit(args, session, None)
+        return
+
+    session.login()
+    page = session.html_get(f"{SUBTASK_WIZARD['page']}?id={issue_id}")
+    atl_token, guid = _require_atl(parse_form(page), "ConvertSubTask page")
+    try:
+        issuetype_id = resolve_issuetype_id(page, target_type)
+    except ValueError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    _drive_subtask_to_task(session, issue_id, atl_token, guid, issuetype_id)
+
+    _, after_type, after_parent = _fetch_meta(key)
+    if after_type != target_type or after_parent is not None:
+        print(
+            f"!!! WARNING: {key} did NOT land in the expected state.\n"
+            f"!!!   wanted type={target_type!r}, parent=(none)\n"
+            f"!!!   got    type={after_type!r}, parent={after_parent!r}\n"
+            f"!!! Manual recovery may be required: "
+            f"http://jira.cubrid.org/browse/{key}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    cache_dir = resolve_cache_dir(args.dir)
+    invalidate(key, cache_dir)
+    if cur_parent:
+        invalidate(cur_parent, cache_dir)
+
+    if _output_format(args) == "text":
+        prev = cur_parent or "(none)"
+        print(
+            f"Converted {key}: Sub-task -> {target_type} "
+            f"(previous parent: {prev}); cache invalidated.",
+            file=sys.stderr,
+        )
+    _emit(args, session, {
+        "issue": key,
+        "type": target_type,
+        "previous_parent": cur_parent,
+    })
+
+
+def cmd_convert_to_subtask(args) -> None:
+    if not (args.to or "").strip():
+        print("Error: --to <PARENT> is required and must be non-empty.",
+              file=sys.stderr)
+        sys.exit(1)
+
+    key = parse_issue_key(args.issue)
+    parent_key = parse_issue_key(args.to)
+    target_type = args.type or "Sub-task"
+
+    issue_id, cur_type, _cur_parent = _fetch_meta(key)
+    if cur_type == "Sub-task":
+        print(
+            f"Error: {key} is already a Sub-task. Use 'reparent' to move "
+            "it under a different parent.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    _parent_id, parent_type, _ = _fetch_meta(parent_key)
+    if parent_type == "Sub-task":
+        print(
+            f"Error: --to {parent_key!r} is itself a Sub-task. Choose a "
+            "non-subtask parent.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    session = _make_session(args)
+
+    if _is_dry_run(args):
+        _drive_task_to_subtask(
+            session,
+            issue_id,
+            DRY_RUN_TOKEN_PLACEHOLDER,
+            DRY_RUN_TOKEN_PLACEHOLDER,
+            DRY_RUN_ISSUETYPE_PLACEHOLDER,
+            parent_key,
+        )
+        _emit(args, session, None)
+        return
+
+    session.login()
+    page = session.html_get(f"{ISSUE_WIZARD['page']}?id={issue_id}")
+    atl_token, guid = _require_atl(parse_form(page), "ConvertIssue page")
+    try:
+        issuetype_id = resolve_issuetype_id(page, target_type)
+    except ValueError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    _drive_task_to_subtask(
+        session, issue_id, atl_token, guid, issuetype_id, parent_key
+    )
+
+    _, after_type, after_parent = _fetch_meta(key)
+    if after_type != target_type or after_parent != parent_key:
+        print(
+            f"!!! WARNING: {key} did NOT land in the expected state.\n"
+            f"!!!   wanted type={target_type!r}, parent={parent_key!r}\n"
+            f"!!!   got    type={after_type!r}, parent={after_parent!r}\n"
+            f"!!! Manual recovery may be required: "
+            f"http://jira.cubrid.org/browse/{key}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    cache_dir = resolve_cache_dir(args.dir)
+    invalidate(key, cache_dir)
+    invalidate(parent_key, cache_dir)
+
+    if _output_format(args) == "text":
+        print(
+            f"Converted {key} to {target_type} under {parent_key}; "
+            "cache invalidated for both.",
+            file=sys.stderr,
+        )
+    _emit(args, session, {
+        "issue": key,
+        "parent": parent_key,
+        "type": target_type,
+    })
+
+
+def cmd_reparent(args) -> None:
+    if not (args.to or "").strip():
+        print("Error: --to <PARENT> is required and must be non-empty.",
+              file=sys.stderr)
+        sys.exit(1)
+
+    key = parse_issue_key(args.issue)
+    new_parent_key = parse_issue_key(args.to)
+    intermediate_type = "Task"
+    target_type = "Sub-task"
+
+    issue_id, cur_type, cur_parent = _fetch_meta(key)
+    if cur_type != "Sub-task":
+        print(
+            f"Error: {key} is currently type={cur_type!r}; reparent requires "
+            "a Sub-task. (Use 'convert-to-subtask' to attach a non-subtask.)",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    if cur_parent == new_parent_key:
+        print(
+            f"Error: {key} is already a Sub-task of {new_parent_key} — nothing to do.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    _np_id, np_type, _ = _fetch_meta(new_parent_key)
+    if np_type == "Sub-task":
+        print(
+            f"Error: --to {new_parent_key!r} is itself a Sub-task. Choose a "
+            "non-subtask parent.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    session = _make_session(args)
+
+    if _is_dry_run(args):
+        # Plan both halves with placeholders.
+        _drive_subtask_to_task(
+            session,
+            issue_id,
+            DRY_RUN_TOKEN_PLACEHOLDER,
+            DRY_RUN_TOKEN_PLACEHOLDER,
+            DRY_RUN_ISSUETYPE_PLACEHOLDER,
+        )
+        _drive_task_to_subtask(
+            session,
+            issue_id,
+            DRY_RUN_TOKEN_PLACEHOLDER,
+            DRY_RUN_TOKEN_PLACEHOLDER,
+            DRY_RUN_ISSUETYPE_PLACEHOLDER,
+            new_parent_key,
+        )
+        _emit(args, session, None)
+        return
+
+    session.login()
+
+    # --- Forward half (Sub-task -> Task; drops parent). --------------- #
+    fwd_page = session.html_get(f"{SUBTASK_WIZARD['page']}?id={issue_id}")
+    atl_token, guid = _require_atl(
+        parse_form(fwd_page), "ConvertSubTask page"
+    )
+    try:
+        fwd_type = resolve_issuetype_id(fwd_page, intermediate_type)
+    except ValueError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+    _drive_subtask_to_task(session, issue_id, atl_token, guid, fwd_type)
+
+    _, inter_type, inter_parent = _fetch_meta(key)
+    if inter_type != intermediate_type or inter_parent is not None:
+        print(
+            f"!!! WARNING: forward conversion of {key} did NOT land in "
+            f"the expected intermediate state.\n"
+            f"!!!   wanted type={intermediate_type!r}, parent=(none)\n"
+            f"!!!   got    type={inter_type!r}, parent={inter_parent!r}\n"
+            f"!!! Reverse step not attempted. Halting.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    # --- ATOMICITY BOUNDARY ------------------------------------------- #
+    # From here on, any failure leaves the issue as a Task with no parent.
+    try:
+        rev_page = session.html_get(f"{ISSUE_WIZARD['page']}?id={issue_id}")
+        rev_form = parse_form(rev_page)
+        if not rev_form["atl_token"]:
+            raise RuntimeError(
+                "could not extract atl_token from ConvertIssue page"
+            )
+        rev_type = resolve_issuetype_id(rev_page, target_type)
+        _drive_task_to_subtask(
+            session,
+            issue_id,
+            rev_form["atl_token"],
+            rev_form.get("guid") or "",
+            rev_type,
+            new_parent_key,
+        )
+        _, final_type, final_parent = _fetch_meta(key)
+        if final_type != target_type or final_parent != new_parent_key:
+            raise RuntimeError(
+                f"final state after reverse conversion: "
+                f"type={final_type!r}, parent={final_parent!r}"
+            )
+    except Exception as exc:
+        print(
+            "\n!!! ATOMICITY WARNING: reparent FAILED after the forward "
+            "conversion succeeded.\n"
+            f"!!! {key} is now a Task with no parent and needs recovery.\n"
+            f"!!! Open http://jira.cubrid.org/browse/{key} and either:\n"
+            f"!!!   - Convert to Sub-task of {new_parent_key} via the web UI, or\n"
+            f"!!!   - Re-run: cubrid-jira convert-to-subtask {key} "
+            f"--to {new_parent_key} --yes\n"
+            f"!!! Cause: {exc}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    cache_dir = resolve_cache_dir(args.dir)
+    invalidate(key, cache_dir)
+    if cur_parent:
+        invalidate(cur_parent, cache_dir)
+    invalidate(new_parent_key, cache_dir)
+
+    if _output_format(args) == "text":
+        old = cur_parent or "(none)"
+        print(
+            f"Reparented {key}: {old} -> {new_parent_key}; cache invalidated "
+            "for all three keys.",
+            file=sys.stderr,
+        )
+    _emit(args, session, {
+        "issue": key,
+        "from_parent": cur_parent,
+        "to_parent": new_parent_key,
+    })
+
+
+# --------------------------------------------------------------------------- #
 # argparse wiring
 # --------------------------------------------------------------------------- #
 
@@ -506,6 +938,45 @@ def _build_parser() -> argparse.ArgumentParser:
                           help='JIRA username, or "" to unassign.')
     _add_write_globals(p_assign)
     p_assign.set_defaults(func=cmd_assign)
+
+    p_convert_issue = sub.add_parser(
+        "convert-to-issue",
+        help="Convert a Sub-task to a top-level issue (drops the parent).",
+    )
+    p_convert_issue.add_argument("issue", help="Sub-task key, e.g. CBRD-12345.")
+    p_convert_issue.add_argument(
+        "--type", default="Task",
+        help="Target issue type (default: Task). Resolved against the wizard "
+             "page's <select name='issuetype'> at runtime; numeric IDs are NOT "
+             "hard-coded since they vary per JIRA install.",
+    )
+    _add_write_globals(p_convert_issue)
+    p_convert_issue.set_defaults(func=cmd_convert_to_issue)
+
+    p_convert_sub = sub.add_parser(
+        "convert-to-subtask",
+        help="Convert a top-level issue to a Sub-task under --to.",
+    )
+    p_convert_sub.add_argument("issue", help="Issue key, e.g. CBRD-12345.")
+    p_convert_sub.add_argument("--to", required=True,
+                               help="Parent issue key (must NOT be a Sub-task).")
+    p_convert_sub.add_argument(
+        "--type", default="Sub-task",
+        help="Target sub-task type (default: Sub-task). Resolved at runtime.",
+    )
+    _add_write_globals(p_convert_sub)
+    p_convert_sub.set_defaults(func=cmd_convert_to_subtask)
+
+    p_reparent = sub.add_parser(
+        "reparent",
+        help="Move a Sub-task from its current parent to --to (composes the "
+             "two convert-* subcommands).",
+    )
+    p_reparent.add_argument("issue", help="Sub-task key, e.g. CBRD-12345.")
+    p_reparent.add_argument("--to", required=True,
+                            help="New parent issue key (must NOT be a Sub-task).")
+    _add_write_globals(p_reparent)
+    p_reparent.set_defaults(func=cmd_reparent)
 
     return parser
 

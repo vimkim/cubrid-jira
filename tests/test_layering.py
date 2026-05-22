@@ -1,12 +1,16 @@
 """Layering rules enforced by static import inspection.
 
 - ``cubrid_jira.markdown`` may not import ``urllib`` — networking lives in
-  http.py.
+  http.py / session.py.
 - ``cubrid_jira.http`` may not import ``subprocess`` — process spawning
   (pandoc) lives in markdown.py.
+- ``cubrid_jira.session`` may not import ``subprocess`` either — same rule
+  as http.py: networking layers do not spawn processes.
+- ``cubrid_jira.wizard`` is pure and may not import ``urllib`` —
+  networking belongs in session.py.
 
-If either rule breaks, the next refactor will silently couple the layers
-again; this is a cheap guardrail.
+If any rule breaks, the next refactor will silently couple the layers
+again; these are cheap guardrails.
 """
 
 from __future__ import annotations
@@ -40,6 +44,20 @@ def test_http_does_not_import_subprocess():
     names = _imports_of("http")
     assert "subprocess" not in names, (
         f"cubrid_jira.http must not import subprocess; found: {sorted(names)}"
+    )
+
+
+def test_session_does_not_import_subprocess():
+    names = _imports_of("session")
+    assert "subprocess" not in names, (
+        f"cubrid_jira.session must not import subprocess; found: {sorted(names)}"
+    )
+
+
+def test_wizard_does_not_import_urllib():
+    names = _imports_of("wizard")
+    assert not any(n == "urllib" or n.startswith("urllib.") for n in names), (
+        f"cubrid_jira.wizard must not import urllib; found: {sorted(names)}"
     )
 
 
