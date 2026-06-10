@@ -15,6 +15,7 @@ import re
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from typing import Any
 
@@ -22,10 +23,20 @@ from cubrid_jira.auth import mask_password
 
 JIRA_BASE = "http://jira.cubrid.org"
 REST_API = f"{JIRA_BASE}/rest/api/2/issue"
+SEARCH_API = f"{JIRA_BASE}/rest/api/2/search"
 
 
 class JiraError(RuntimeError):
-    pass
+    """A JIRA request failed.
+
+    ``code`` carries the HTTP status when the failure was an HTTP error
+    (``None`` for network/transport errors) so callers can map it onto the
+    project's exit-code contract (400→5, 401→2, 403→3, 404→4).
+    """
+
+    def __init__(self, *args, code: int | None = None) -> None:
+        super().__init__(*args)
+        self.code = code
 
 
 def parse_issue_key(arg: str) -> str:
@@ -59,6 +70,59 @@ def fetch_issue(key: str) -> dict:
     except Exception as e:
         print(f"  [Error] Failed to fetch {key}: {e}", file=sys.stderr)
         return {}
+
+
+def search_issues(
+    jql: str,
+    fields: str = "summary,status,issuetype,assignee,updated",
+    max_results: int = 50,
+    start_at: int = 0,
+) -> dict:
+    """Unauthenticated JQL search via ``/rest/api/2/search``.
+
+    Returns the parsed search response — ``{"total", "startAt",
+    "maxResults", "issues": [...]}``. Like :func:`fetch_issue`, this is a
+    read-only flow that needs no credentials: the public CUBRID JIRA serves
+    search results anonymously.
+
+    Unlike ``fetch_issue`` (which swallows errors and returns ``{}``), this
+    raises :class:`JiraError` on HTTP/network failure so callers can tell a
+    genuinely empty result set apart from a rejected query (e.g. a malformed
+    JQL string yields HTTP 400, not zero hits). The raised error carries the
+    HTTP ``code`` so the CLI can honor the exit-code contract; 5xx and
+    transient network errors get one short retry, mirroring :class:`JiraClient`.
+    """
+    query = urllib.parse.urlencode(
+        {
+            "jql": jql,
+            "fields": fields,
+            "maxResults": max_results,
+            "startAt": start_at,
+        }
+    )
+    url = f"{SEARCH_API}?{query}"
+    req = urllib.request.Request(url, headers={"Accept": "application/json"})
+    attempts = 0
+    while True:
+        attempts += 1
+        try:
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                return json.loads(resp.read().decode())
+        except urllib.error.HTTPError as e:
+            if 500 <= e.code < 600 and attempts < 2:
+                time.sleep(1.5)
+                continue
+            detail = _read_error_body(e)
+            raise JiraError(
+                f"JQL search failed (HTTP {e.code}): {detail or e.reason}",
+                code=e.code,
+            ) from e
+        except urllib.error.URLError as e:
+            reason = getattr(e, "reason", e)
+            if attempts < 2:
+                time.sleep(1.5)
+                continue
+            raise JiraError(f"Network error during JQL search: {reason}") from e
 
 
 class JiraClient:

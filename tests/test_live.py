@@ -23,7 +23,7 @@ import os
 import pytest
 
 from cubrid_jira.cli import main
-from cubrid_jira.http import fetch_issue
+from cubrid_jira.http import fetch_issue, search_issues
 
 
 @pytest.mark.live
@@ -33,6 +33,17 @@ def test_fetch_issue_returns_real_data():
     assert data.get("key") == "CBRD-1"
     fields = data.get("fields") or {}
     assert fields.get("summary"), "expected a summary field on CBRD-1"
+
+
+@pytest.mark.live
+def test_jql_search_returns_real_results():
+    # Read-only: the oldest CBRD issues always exist; ask for one.
+    result = search_issues("project = CBRD ORDER BY created ASC", max_results=1)
+    assert result.get("total", 0) >= 1, "expected at least one CBRD issue"
+    issues = result.get("issues") or []
+    assert len(issues) == 1, "maxResults=1 should cap the page at one issue"
+    assert issues[0].get("key", "").startswith("CBRD-")
+    assert (issues[0].get("fields") or {}).get("summary")
 
 
 @pytest.mark.live

@@ -54,6 +54,57 @@ def extract_related_keys(data: dict) -> list[tuple[str, str]]:
     return related
 
 
+def _md_cell(value: object) -> str:
+    """Make a server-controlled value safe inside a markdown table cell.
+
+    Escapes ``|`` and flattens newlines so a stray pipe or multi-line field
+    can't break the table layout.
+    """
+    return (
+        str(value)
+        .replace("|", "\\|")
+        .replace("\r\n", " ")
+        .replace("\n", " ")
+        .replace("\r", " ")
+        .strip()
+    )
+
+
+def format_search_results_markdown(result: dict) -> str:
+    """Render a ``/rest/api/2/search`` response as a compact markdown table.
+
+    Pure rendering, like :func:`format_issue_markdown` — no network import.
+    One row per issue: key (linked) · status · type · assignee · updated ·
+    summary. Every server-controlled cell is escaped (see :func:`_md_cell`)
+    so pipes or newlines can't corrupt the table.
+    """
+    issues = result.get("issues", [])
+    total = result.get("total", len(issues))
+    if not issues:
+        return f"# JQL search — 0 of {total} matching issues"
+
+    lines = [
+        f"# JQL search — {len(issues)} of {total} matching issues",
+        "",
+        "| Key | Status | Type | Assignee | Updated | Summary |",
+        "|---|---|---|---|---|---|",
+    ]
+    for issue in issues:
+        key = issue.get("key", "?")
+        fields = issue.get("fields", {})
+        status = _md_cell((fields.get("status") or {}).get("name", "?"))
+        issue_type = _md_cell((fields.get("issuetype") or {}).get("name", "?"))
+        assignee = _md_cell((fields.get("assignee") or {}).get("displayName", "Unassigned"))
+        updated = _md_cell((fields.get("updated") or "")[:10])
+        summary = _md_cell(fields.get("summary") or "")
+        link = f"{JIRA_BASE}/browse/{key}"
+        lines.append(
+            f"| [{key}]({link}) | {status} | {issue_type} | "
+            f"{assignee} | {updated} | {summary} |"
+        )
+    return "\n".join(lines)
+
+
 def format_issue_markdown(data: dict) -> str:
     """Format an issue dict as a human-readable markdown document."""
     if not data:
