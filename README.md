@@ -2,7 +2,8 @@
 
 A CUBRID JIRA CLI for `http://jira.cubrid.org` with three workflow buckets:
 
-* **cache-first reads** (`search`) — markdown to stdout, no network on a cache hit.
+* **cache-first reads** (`search`) — one issue by key, markdown to stdout, no network on a cache hit.
+* **JQL list search** (`jql`) — list issues matching a JQL query as a markdown table (or `--output json`); read-only, no credentials.
 * **field writes** (`create`, `comment`, `comment-list`, `comment-update`, `comment-delete`, `link`, `transition`, `assign`, `update`) — dry-run by default; `--yes` to send.
 * **structural writes** (`convert-to-issue`, `convert-to-subtask`, `reparent`) — drive the JIRA Convert wizard for the operations REST silently no-ops on; same dry-run contract.
 
@@ -16,7 +17,7 @@ If you are an autonomous agent running in a shell, this is everything you need:
 
 ```text
 Canonical command   : cubrid-jira <subcommand> [args…]
-Subcommands         : read              search
+Subcommands         : read              search (one issue by key) | jql (list by query)
                       field-write       create | comment | comment-list | comment-update | comment-delete |
                                         link | transition | assign | update
                       structural-write  convert-to-issue | convert-to-subtask | reparent
@@ -25,8 +26,8 @@ Credentials         : env  CUBRID_JIRA_USER  +  CUBRID_JIRA_PASSWORD
 Output contract     : markdown / JSON   → stdout
                       status / progress → stderr
                       (safe to pipe stdout)
-Machine-readable    : add `--output json` to any write subcommand;
-                      stdout becomes exactly one JSON object.
+Machine-readable    : add `--output json` to any write subcommand or to the
+                      `jql` read; stdout becomes one JSON object/line.
 Dry-run is default  : ALL writes are dry-run unless you pass `--yes`.
                       This includes the structural writes.
 CAPTCHA lockout     : on HTTP 401 the tool exits 2 immediately and does
@@ -121,6 +122,29 @@ echo 'export CUBRID_JIRA_DIR="$HOME/.local/share/cubrid-jira/issues"' >> ~/.bash
 ```
 
 ---
+
+## List flow — `cubrid-jira jql`
+
+Run a JQL query and list the matching issues. Unlike `search` (one issue by
+key, cache-first), `jql` always hits `/rest/api/2/search` live and is
+**read-only and unauthenticated** — same anonymous access as `search`'s fetch.
+
+```sh
+cubrid-jira jql "assignee = jdoe AND status not in (Resolved, Closed, Done) ORDER BY updated DESC"
+cubrid-jira jql "project = CBRD AND created >= -7d" --max 100
+cubrid-jira jql "fixVersion = guava" --output json | jq '.issues[].key'
+```
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--fields` | `summary,status,issuetype,assignee,updated` | Comma-separated fields to request. Honored as-is for `--output json`; for the text table the display columns are always included so a narrowed list can't blank them. |
+| `--max N` | `50` | `maxResults` — page size (must be ≥ 0). |
+| `--start-at N` | `0` | `startAt` — 0-based offset for pagination (must be ≥ 0). |
+| `--output {text,json}` | `text` | `text` = markdown table; `json` = the raw `/rest/api/2/search` response on one line. |
+
+- **`text`** prints a markdown table: key (linked) · status · type · assignee · updated · summary, headed by `N of TOTAL matching issues`. Cell values are escaped so pipes/newlines can't corrupt the table.
+- **`json`** prints the server's response verbatim on one line — pipe into `jq` or hand to an agent.
+- A malformed JQL is a server-side HTTP 400 → exits **5** (per the exit-code contract), not zero hits.
 
 ## Field-write flow — `create / comment / comment-list / comment-update / comment-delete / link / transition / assign / update`
 

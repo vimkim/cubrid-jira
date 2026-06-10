@@ -2,7 +2,8 @@
 
 Subcommands
 -----------
-search      Cache-first read (existing behavior).
+search      Cache-first read of ONE issue by key (existing behavior).
+jql         GET  /rest/api/2/search — list issues matching a JQL query.
 create      POST /rest/api/2/issue
 comment     POST /rest/api/2/issue/{key}/comment
 link        POST /rest/api/2/issueLink
@@ -35,7 +36,14 @@ from cubrid_jira.fields import (
     resolve_name,
     save_field_index,
 )
-from cubrid_jira.http import JiraClient, fetch_issue, parse_issue_key
+from cubrid_jira.http import (
+    JiraClient,
+    JiraError,
+    fetch_issue,
+    parse_issue_key,
+    search_issues,
+)
+from cubrid_jira.markdown import format_search_results_markdown
 from cubrid_jira.session import SessionClient
 from cubrid_jira.walk import fetch_recursive, save_issue
 from cubrid_jira.wizard import (
@@ -56,6 +64,28 @@ DEFAULT_SERVER = "http://jira.cubrid.org"
 ALLOWED_LINK_TYPES = ("Blocks", "Cloners", "Duplicate", "Relates")
 DRY_RUN_TOKEN_PLACEHOLDER = "<extracted-at-runtime>"
 DRY_RUN_ISSUETYPE_PLACEHOLDER = "<resolved-at-runtime>"
+
+# Columns the `jql` text table renders; the request always includes these in
+# text mode so a narrowed --fields can't blank out the table.
+JQL_DISPLAY_FIELDS = ("summary", "status", "issuetype", "assignee", "updated")
+JQL_DEFAULT_FIELDS = ",".join(JQL_DISPLAY_FIELDS)
+
+
+def _non_negative_int(value: str) -> int:
+    """argparse type: reject negative ints (e.g. --max, --start-at)."""
+    ivalue = int(value)
+    if ivalue < 0:
+        raise argparse.ArgumentTypeError(f"must be >= 0, got {value!r}")
+    return ivalue
+
+
+def _exit_code_for_http(code: int | None) -> int:
+    """Map an HTTP status onto the project exit-code contract.
+
+    0 ok | 1 generic | 2 401 | 3 403 | 4 404 | 5 400. ``None`` (transport
+    error, no HTTP status) and any unlisted status fall through to 1.
+    """
+    return {400: 5, 401: 2, 403: 3, 404: 4}.get(code or 0, 1)
 
 
 # --------------------------------------------------------------------------- #
@@ -329,6 +359,38 @@ def cmd_search(args) -> None:
     else:
         print(f"Error: Failed to fetch {key}", file=sys.stderr)
         sys.exit(1)
+
+
+# --------------------------------------------------------------------------- #
+# jql (read-only, unauthenticated list search)
+# --------------------------------------------------------------------------- #
+
+def cmd_jql(args) -> None:
+    output = _output_format(args)
+    # JSON returns exactly the requested fields. The text table needs its
+    # display columns, so union them in — a narrowed --fields can't blank the
+    # table, but any extra fields the user asked for are still fetched.
+    if output == "json":
+        fields = args.fields
+    else:
+        requested = [f.strip() for f in args.fields.split(",") if f.strip()]
+        fields = ",".join(dict.fromkeys([*JQL_DISPLAY_FIELDS, *requested]))
+
+    try:
+        result = search_issues(
+            args.jql,
+            fields=fields,
+            max_results=args.max,
+            start_at=args.start_at,
+        )
+    except JiraError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(_exit_code_for_http(e.code))
+
+    if output == "json":
+        print(json.dumps(result, ensure_ascii=False))
+    else:
+        print(format_search_results_markdown(result))
 
 
 # --------------------------------------------------------------------------- #
@@ -1189,6 +1251,37 @@ def _build_parser() -> argparse.ArgumentParser:
     p_search.add_argument("--force", action="store_true",
                           help="Bypass cache and re-fetch.")
     p_search.set_defaults(func=cmd_search)
+
+    p_jql = sub.add_parser(
+        "jql",
+        help="Run a JQL query and list matching issues (read-only, unauthenticated).",
+    )
+    p_jql.add_argument(
+        "jql",
+        metavar="JQL",
+        help='JQL query string, e.g. "assignee = jdoe AND status not in '
+             '(Resolved, Closed, Done) ORDER BY updated DESC".',
+    )
+    p_jql.add_argument(
+        "--fields", default=JQL_DEFAULT_FIELDS,
+        help="Comma-separated issue fields to request (default: "
+             f"{JQL_DEFAULT_FIELDS}). Honored as-is for --output json; for the "
+             "text table the display columns are always included.",
+    )
+    p_jql.add_argument(
+        "--max", type=_non_negative_int, default=50, metavar="N",
+        help="Maximum issues to return (maxResults; default 50).",
+    )
+    p_jql.add_argument(
+        "--start-at", type=_non_negative_int, default=0, metavar="N",
+        help="0-based index of the first result (startAt; for pagination).",
+    )
+    p_jql.add_argument(
+        "--output", choices=("text", "json"), default="text",
+        help="Output format. 'text' prints a markdown table; 'json' prints the "
+             "raw /rest/api/2/search response on one line (for jq/agents).",
+    )
+    p_jql.set_defaults(func=cmd_jql)
 
     p_create = sub.add_parser("create", help="Create a new issue.")
     p_create.add_argument("--project", required=True, help="Project key, e.g. CBRD.")

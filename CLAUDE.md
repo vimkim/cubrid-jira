@@ -2,7 +2,7 @@
 
 ```text
 canonical binary    cubrid-jira <subcommand> [args…]
-read                search
+read                search (one issue by key, cache-first) | jql (list by query, live)
 field-write         create | comment | comment-list | comment-update | comment-delete | link | transition | assign | update
 structural-write    convert-to-issue | convert-to-subtask | reparent
 credentials         env CUBRID_JIRA_USER + CUBRID_JIRA_PASSWORD
@@ -10,7 +10,7 @@ credentials         env CUBRID_JIRA_USER + CUBRID_JIRA_PASSWORD
 cache directory     $CUBRID_JIRA_DIR  ||  ~/.local/share/cubrid-jira/issues/
 output (stdout)     markdown or JSON
 output (stderr)     status + errors
-machine-readable    add `--output json` to write subcommands
+machine-readable    add `--output json` to write subcommands or to `jql`
                     → exactly one JSON object on stdout
 exit codes          0 ok | 1 generic | 2 401 | 3 403 | 4 404 | 5 400
 ```
@@ -49,7 +49,7 @@ Full background, traps, and curl-only smoke test:
 
 ```text
 cli.py        parent argparse + dispatch + payload builders
-http.py       JiraClient (basic-auth, dry-run, retries) + fetch_issue (unauth GET)
+http.py       JiraClient (basic-auth, dry-run, retries) + fetch_issue / search_issues (unauth GET)
 session.py    SessionClient — JSESSIONID cookies + X-Atlassian-Token for wizard POSTs
 wizard.py     pure HTML parsing + form-payload builders for the Convert wizard
 markdown.py   Jira-wiki → markdown rendering; pure
@@ -65,7 +65,9 @@ Layering invariants (enforced by `tests/test_layering.py`):
 - `wizard.py`   does **not** import `urllib` — parsing is pure.
 - `http.py`    does **not** import `subprocess` — no pandoc/process spawning.
 - `session.py` does **not** import `subprocess` — same rule as http.py.
-- `walk.py` is the only module allowed to mix the HTTP and markdown layers.
+- `walk.py` is the only *library* module allowed to mix the HTTP and markdown
+  layers; `cli.py` is the composition root and may wire any layers together
+  (e.g. `jql` calls `http.search_issues` then `markdown.format_search_results_markdown`).
 
 The legacy import path `cubrid_jira_fetcher` re-exports `cubrid_jira` and emits a `DeprecationWarning`; do not write new code against it.
 
