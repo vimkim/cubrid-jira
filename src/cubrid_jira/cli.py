@@ -45,6 +45,7 @@ from cubrid_jira.http import (
 )
 from cubrid_jira.markdown import format_search_results_markdown
 from cubrid_jira.session import SessionClient
+from cubrid_jira.spacing import normalize_korean_jira_spacing
 from cubrid_jira.walk import fetch_recursive, save_issue
 from cubrid_jira.wizard import (
     ISSUE_WIZARD,
@@ -400,7 +401,9 @@ def cmd_jql(args) -> None:
 def cmd_create(args) -> None:
     description = None
     if args.description_file:
-        description = Path(args.description_file).read_text(encoding="utf-8")
+        description = normalize_korean_jira_spacing(
+            Path(args.description_file).read_text(encoding="utf-8")
+        )
 
     client = _make_client(args)
     try:
@@ -474,7 +477,9 @@ def cmd_create(args) -> None:
 
 def cmd_comment(args) -> None:
     key = parse_issue_key(args.issue)
-    body_text = Path(args.body_file).read_text(encoding="utf-8")
+    body_text = normalize_korean_jira_spacing(
+        Path(args.body_file).read_text(encoding="utf-8")
+    )
 
     client = _make_client(args)
     resp = client.request(
@@ -545,9 +550,11 @@ def cmd_comment_list(args) -> None:
 def cmd_comment_update(args) -> None:
     key = parse_issue_key(args.issue)
     if args.body_file == "-":
-        body_text = sys.stdin.read()
+        body_text = normalize_korean_jira_spacing(sys.stdin.read())
     else:
-        body_text = Path(args.body_file).read_text(encoding="utf-8")
+        body_text = normalize_korean_jira_spacing(
+            Path(args.body_file).read_text(encoding="utf-8")
+        )
 
     client = _make_client(args)
     client.request(
@@ -712,9 +719,11 @@ def cmd_update(args) -> None:
     description = None
     if args.description_file:
         if args.description_file == "-":
-            description = sys.stdin.read()
+            description = normalize_korean_jira_spacing(sys.stdin.read())
         else:
-            description = Path(args.description_file).read_text(encoding="utf-8")
+            description = normalize_korean_jira_spacing(
+                Path(args.description_file).read_text(encoding="utf-8")
+            )
 
     client = _make_client(args)
     try:

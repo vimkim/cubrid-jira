@@ -179,6 +179,8 @@ cubrid-jira update     CBRD-A [--summary "..."] [--description-file path] \
 
 `update` edits an existing issue's fields. At least one of `--summary`, `--description-file`, `--priority`, `--label`, `--component`, or `--field` is required. **`--label` and `--component` replace the full list** — they are not additive (Jira REST `fields` semantics). `--description-file -` reads from stdin.
 
+For `--body-file` and `--description-file`, write commands send raw Jira wiki text but automatically add spacing around inline markup such as `{{name}}`, `*bold*`, and `_emphasis_` when it touches Korean text, because Jira Server can fail to parse markers like `{{name}}의`.
+
 ### `--field FIELD=VALUE` — arbitrary custom fields
 
 Repeat `--field` to set any JIRA custom field (the canonical use case is project-required fields like CUBRID's `QA Scenario`, which gates every `create` against `CBRD`).
