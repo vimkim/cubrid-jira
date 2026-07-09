@@ -1,4 +1,4 @@
-"""Jira-wiki → Markdown rendering for fetched issue JSON.
+"""Jira-wiki <-> Markdown rendering for Jira issue text.
 
 Layering rule
 -------------
@@ -7,14 +7,33 @@ This module must not import ``urllib``. Networking lives in
 
 It does shell out to ``pandoc`` for the wiki-to-markdown conversion; if
 pandoc is missing the body falls through as plain text rather than failing
-the whole command.
+the whole read command. Markdown-to-Jira conversion is used for writes and
+fails hard because silently uploading raw Markdown is a user-visible mistake.
 """
 
 from __future__ import annotations
 
+import re
 import subprocess
 
 from cubrid_jira.http import JIRA_BASE  # constant-only import — no cycles
+from cubrid_jira.spacing import normalize_korean_jira_spacing
+
+KOREAN = r"[\u1100-\u11FF\u3130-\u318F\uAC00-\uD7AF]"
+MARKDOWN_INLINE_RE = re.compile(
+    r"""
+    (?<!\*)\*\*([^\n]*?[^\s*])\*\*(?!\*)      |   # **bold**
+    (?<!\*)\*([^\s*\n][^\n]*?[^\s*])\*(?!\*) |   # *italic*
+    `([^\s`\n][^\n]*?[^\s`])`                    # `code`
+    """,
+    re.VERBOSE,
+)
+MARKDOWN_FENCE_RE = re.compile(r"^\s*(```|~~~)")
+JIRA_VERBATIM_RE = re.compile(r"^\s*\{(?:code|noformat)(?::[^}]*)?\}\s*$")
+
+
+class MarkdownConversionError(RuntimeError):
+    """Markdown could not be converted to Jira wiki markup."""
 
 
 def jira_to_markdown(text: str) -> str:
@@ -30,6 +49,180 @@ def jira_to_markdown(text: str) -> str:
         return result.stdout.strip()
     except Exception:
         return text
+
+
+def _is_korean_char(ch: str) -> bool:
+    return re.match(KOREAN, ch) is not None
+
+
+def _normalize_markdown_span(span: str) -> str:
+    if span.startswith("**") and span.endswith("**"):
+        return f"**{span[2:-2].strip()}**"
+    if span.startswith("*") and span.endswith("*"):
+        return f"*{span[1:-1].strip()}*"
+    if span.startswith("`") and span.endswith("`"):
+        return f"`{span[1:-1].strip()}`"
+    return span
+
+
+def _fix_markdown_inline_spacing(text: str) -> str:
+    result: list[str] = []
+    last = 0
+
+    for match in MARKDOWN_INLINE_RE.finditer(text):
+        start, end = match.span()
+        span = _normalize_markdown_span(match.group(0))
+
+        result.append(text[last:start])
+
+        prev_char = text[start - 1] if start > 0 else ""
+        next_char = text[end] if end < len(text) else ""
+
+        if prev_char and _is_korean_char(prev_char):
+            if not result[-1].endswith(" "):
+                result.append(" ")
+
+        result.append(span)
+
+        if next_char and _is_korean_char(next_char):
+            result.append(" ")
+
+        last = end
+
+    result.append(text[last:])
+    return "".join(result)
+
+
+def normalize_korean_markdown_spacing(text: str) -> str:
+    """Insert spaces between Korean text and Markdown inline spans.
+
+    Fenced code blocks are left unchanged.
+    """
+    result: list[str] = []
+    fence_marker = ""
+
+    for line in text.splitlines(keepends=True):
+        content = line.rstrip("\r\n")
+        newline = line[len(content):]
+        fence_match = MARKDOWN_FENCE_RE.match(content)
+
+        if fence_match:
+            marker = fence_match.group(1)
+            if not fence_marker:
+                fence_marker = marker
+            elif marker == fence_marker:
+                fence_marker = ""
+            result.append(line)
+            continue
+
+        if fence_marker:
+            result.append(line)
+        else:
+            result.append(_fix_markdown_inline_spacing(content) + newline)
+
+    return "".join(result)
+
+
+def sanitize_markdown(text: str) -> str:
+    """Ensure blank lines before headings, lists, and fenced code blocks."""
+    lines = text.split("\n")
+    out: list[str] = []
+    for i, line in enumerate(lines):
+        if i > 0 and out and out[-1].strip() != "":
+            needs_blank = False
+            if re.match(r"^#{1,6}\s", line):
+                needs_blank = True
+            elif re.match(r"^[-*+]\s", line):
+                needs_blank = not re.match(r"^[-*+]\s", out[-1])
+            elif re.match(r"^\d+\.\s", line):
+                needs_blank = not re.match(r"^\d+\.\s", out[-1])
+            elif re.match(r"^[~`]{3}", line):
+                needs_blank = True
+            if needs_blank:
+                out.append("")
+        out.append(line)
+    return "\n".join(out)
+
+
+def _fix_jira_lines_outside_verbatim_blocks(text: str, fix_line) -> str:
+    result: list[str] = []
+    in_verbatim = False
+
+    for line in text.splitlines(keepends=True):
+        content = line.rstrip("\r\n")
+        newline = line[len(content):]
+
+        if JIRA_VERBATIM_RE.match(content):
+            in_verbatim = not in_verbatim
+            result.append(line)
+            continue
+
+        if in_verbatim:
+            result.append(line)
+        else:
+            result.append(fix_line(content) + newline)
+
+    return "".join(result)
+
+
+def fix_jira_bold_code_nesting(text: str) -> str:
+    """Split Jira ``{{monospace}}`` spans out of Jira ``*bold*`` spans."""
+
+    def _fix_line(line: str) -> str:
+        if re.match(r"\s*\*+\s", line):
+            return line
+
+        def _split_bold(match):
+            inner = match.group(1)
+            if "{{" not in inner:
+                return match.group(0)
+
+            segments = re.split(r"(\{\{.*?\}\})", inner)
+            parts: list[str] = []
+            for segment in segments:
+                if segment.startswith("{{") and segment.endswith("}}"):
+                    parts.append(segment)
+                else:
+                    stripped = segment.strip()
+                    if stripped:
+                        parts.append(f"*{stripped}*")
+            return " ".join(parts)
+
+        return re.sub(r"\*(?!\s)([^*\n]+?)(?<!\s)\*", _split_bold, line)
+
+    return _fix_jira_lines_outside_verbatim_blocks(text, _fix_line)
+
+
+def md_to_jira(md_text: str) -> str:
+    """Convert Markdown to Jira wiki markup via pandoc."""
+    try:
+        result = subprocess.run(
+            ["pandoc", "--from", "markdown", "--to", "jira"],
+            input=md_text,
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=10,
+        )
+        return result.stdout
+    except FileNotFoundError as e:
+        raise MarkdownConversionError("pandoc is not installed") from e
+    except subprocess.TimeoutExpired as e:
+        raise MarkdownConversionError("pandoc timed out") from e
+    except subprocess.CalledProcessError as e:
+        detail = (e.stderr or "").strip()
+        message = "pandoc failed"
+        if detail:
+            message = f"{message}: {detail}"
+        raise MarkdownConversionError(message) from e
+
+
+def markdown_to_jira_body(md_text: str) -> str:
+    """Render local Markdown as Jira wiki markup suitable for writes."""
+    spaced_markdown = normalize_korean_markdown_spacing(md_text)
+    jira_text = md_to_jira(sanitize_markdown(spaced_markdown))
+    jira_text = fix_jira_bold_code_nesting(jira_text)
+    return normalize_korean_jira_spacing(jira_text)
 
 
 def extract_related_keys(data: dict) -> list[tuple[str, str]]:

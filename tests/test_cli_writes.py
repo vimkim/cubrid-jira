@@ -7,11 +7,18 @@ a fake server, then assert on (a) the recorded HTTP requests and
 
 from __future__ import annotations
 
+import io
 import json
 
 import pytest
 
 from cubrid_jira.cli import main
+from cubrid_jira.markdown import MarkdownConversionError
+
+
+@pytest.fixture(autouse=True)
+def _identity_markdown_conversion(monkeypatch):
+    monkeypatch.setattr("cubrid_jira.cli.markdown_to_jira_body", lambda text: text)
 
 
 # --------------------------------------------------------------------------- #
@@ -83,12 +90,46 @@ def test_create_description_spaces_jira_markup_next_to_korean(
         "create",
         "--project", "CBRD", "--type", "Bug", "--summary", "hello",
         "--description-file", str(body_file),
+        "--from", "jira",
         "--yes",
     ])
 
     rec = fake_server.requests[0]
     assert json.loads(rec.body.decode())["fields"]["description"] == (
         "주 회귀: {{xlocator_fetch_all}} 의 값"
+    )
+
+
+def test_create_description_defaults_to_markdown_conversion(
+    fake_server, tmp_path, monkeypatch
+):
+    monkeypatch.setenv("CUBRID_JIRA_DIR", str(tmp_path))
+    fake_server.route("POST", "/rest/api/2/issue", response={"id": "1", "key": "CBRD-999"})
+    fake_server.route(
+        "GET", "/rest/api/2/issue/CBRD-999?expand=renderedFields",
+        response={"key": "CBRD-999", "fields": {"summary": "hello"}},
+    )
+    seen = {}
+
+    def convert(text: str) -> str:
+        seen["text"] = text
+        return "h1. Title\n{{code}}\n"
+
+    monkeypatch.setattr("cubrid_jira.cli.markdown_to_jira_body", convert)
+    body_file = tmp_path / "body.md"
+    body_file.write_text("# Title\n\n`code`\n")
+
+    main([
+        "create",
+        "--project", "CBRD", "--type", "Bug", "--summary", "hello",
+        "--description-file", str(body_file),
+        "--yes",
+    ])
+
+    assert seen["text"] == "# Title\n\n`code`\n"
+    rec = fake_server.requests[0]
+    assert json.loads(rec.body.decode())["fields"]["description"] == (
+        "h1. Title\n{{code}}\n"
     )
 
 
@@ -132,6 +173,46 @@ def test_comment_invalidates_cache_after_live_post(fake_server, tmp_path, monkey
     assert json.loads(rec.body.decode()) == {"body": "a comment body"}
 
 
+def test_comment_defaults_to_markdown_conversion(fake_server, tmp_path, monkeypatch):
+    monkeypatch.setenv("CUBRID_JIRA_DIR", str(tmp_path))
+    fake_server.route("POST", "/rest/api/2/issue/CBRD-5/comment", response={"id": "1"})
+    seen = {}
+
+    def convert(text: str) -> str:
+        seen["text"] = text
+        return "h1. Title\n{{code}}\n{noformat}\nx\n{noformat}\n"
+
+    monkeypatch.setattr("cubrid_jira.cli.markdown_to_jira_body", convert)
+    body_file = tmp_path / "note.md"
+    body_file.write_text("# Title\n\n`code`\n\n```text\nx\n```\n")
+
+    main(["comment", "CBRD-5", "--body-file", str(body_file), "--yes"])
+
+    assert seen["text"] == "# Title\n\n`code`\n\n```text\nx\n```\n"
+    rec = fake_server.requests[0]
+    assert json.loads(rec.body.decode()) == {
+        "body": "h1. Title\n{{code}}\n{noformat}\nx\n{noformat}\n"
+    }
+
+
+def test_comment_markdown_conversion_error_exits_before_send(
+    fake_server, tmp_path, monkeypatch, capsys
+):
+    def fail(_text: str) -> str:
+        raise MarkdownConversionError("pandoc is not installed")
+
+    monkeypatch.setattr("cubrid_jira.cli.markdown_to_jira_body", fail)
+    body_file = tmp_path / "note.md"
+    body_file.write_text("# Title\n")
+
+    with pytest.raises(SystemExit) as exc:
+        main(["comment", "CBRD-5", "--body-file", str(body_file), "--yes"])
+
+    assert exc.value.code == 1
+    assert "pandoc is not installed" in capsys.readouterr().err
+    assert fake_server.requests == []
+
+
 def test_comment_spaces_jira_markup_next_to_korean(fake_server, tmp_path, monkeypatch):
     monkeypatch.setenv("CUBRID_JIRA_DIR", str(tmp_path))
     fake_server.route("POST", "/rest/api/2/issue/CBRD-5/comment", response={"id": "1"})
@@ -139,7 +220,12 @@ def test_comment_spaces_jira_markup_next_to_korean(fake_server, tmp_path, monkey
     body_file = tmp_path / "note.txt"
     body_file.write_text("주 회귀: {{xlocator_fetch_all}}의 값과 한국*강조*값")
 
-    main(["comment", "CBRD-5", "--body-file", str(body_file), "--yes"])
+    main([
+        "comment", "CBRD-5",
+        "--body-file", str(body_file),
+        "--from", "jira",
+        "--yes",
+    ])
 
     rec = fake_server.requests[0]
     assert json.loads(rec.body.decode()) == {
@@ -263,6 +349,35 @@ def test_comment_update_invalidates_cache_after_live_put(
     assert json.loads(rec.body.decode()) == {"body": "edited comment body"}
 
 
+def test_comment_update_defaults_to_markdown_conversion_from_stdin(
+    fake_server, tmp_path, monkeypatch
+):
+    monkeypatch.setenv("CUBRID_JIRA_DIR", str(tmp_path))
+    fake_server.route(
+        "PUT", "/rest/api/2/issue/CBRD-5/comment/1001",
+        response={"id": "1001", "body": "updated"},
+    )
+    seen = {}
+
+    def convert(text: str) -> str:
+        seen["text"] = text
+        return "h1. Edited\n"
+
+    monkeypatch.setattr("cubrid_jira.cli.markdown_to_jira_body", convert)
+    monkeypatch.setattr("sys.stdin", io.StringIO("# Edited\n"))
+
+    main([
+        "comment-update", "CBRD-5",
+        "--id", "1001",
+        "--body-file", "-",
+        "--yes",
+    ])
+
+    assert seen["text"] == "# Edited\n"
+    rec = fake_server.requests[0]
+    assert json.loads(rec.body.decode()) == {"body": "h1. Edited\n"}
+
+
 def test_comment_update_spaces_jira_markup_next_to_korean(
     fake_server, tmp_path, monkeypatch
 ):
@@ -278,6 +393,7 @@ def test_comment_update_spaces_jira_markup_next_to_korean(
         "comment-update", "CBRD-5",
         "--id", "1001",
         "--body-file", str(body_file),
+        "--from", "jira",
         "--yes",
     ])
 
@@ -468,6 +584,30 @@ def test_update_description_invalidates_cache_after_live_put(
     }
 
 
+def test_update_description_defaults_to_markdown_conversion(
+    fake_server, tmp_path, monkeypatch
+):
+    monkeypatch.setenv("CUBRID_JIRA_DIR", str(tmp_path))
+    fake_server.route("PUT", "/rest/api/2/issue/CBRD-9", response=None)
+    seen = {}
+
+    def convert(text: str) -> str:
+        seen["text"] = text
+        return "h1. New body\n"
+
+    monkeypatch.setattr("cubrid_jira.cli.markdown_to_jira_body", convert)
+    body_file = tmp_path / "body.md"
+    body_file.write_text("# New body\n")
+
+    main(["update", "CBRD-9", "--description-file", str(body_file), "--yes"])
+
+    assert seen["text"] == "# New body\n"
+    rec = fake_server.requests[0]
+    assert json.loads(rec.body.decode()) == {
+        "fields": {"description": "h1. New body\n"}
+    }
+
+
 def test_update_description_spaces_jira_markup_next_to_korean(
     fake_server, tmp_path, monkeypatch
 ):
@@ -476,7 +616,12 @@ def test_update_description_spaces_jira_markup_next_to_korean(
     body_file = tmp_path / "body.txt"
     body_file.write_text("후속 항목 {{heap_next}}의 처리")
 
-    main(["update", "CBRD-9", "--description-file", str(body_file), "--yes"])
+    main([
+        "update", "CBRD-9",
+        "--description-file", str(body_file),
+        "--from", "jira",
+        "--yes",
+    ])
 
     rec = fake_server.requests[0]
     assert json.loads(rec.body.decode()) == {

@@ -10,7 +10,14 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from cubrid_jira.cli import main
+
+
+@pytest.fixture(autouse=True)
+def _identity_markdown_conversion(monkeypatch):
+    monkeypatch.setattr("cubrid_jira.cli.markdown_to_jira_body", lambda text: text)
 
 
 def _sole_stdout_json(capsys) -> dict:
@@ -65,6 +72,34 @@ def test_link_dry_run_json(fake_server, capsys):
             },
         }],
     }
+
+
+def test_comment_dry_run_json_uses_markdown_conversion(
+    fake_server, tmp_path, monkeypatch, capsys
+):
+    monkeypatch.setattr(
+        "cubrid_jira.cli.markdown_to_jira_body",
+        lambda text: "h1. Title\n{{code}}\n",
+    )
+    body_file = tmp_path / "note.md"
+    body_file.write_text("# Title\n\n`code`\n")
+
+    main([
+        "comment", "CBRD-5",
+        "--body-file", str(body_file),
+        "--output", "json",
+    ])
+
+    plan = _sole_stdout_json(capsys)
+    assert plan == {
+        "dry_run": True,
+        "requests": [{
+            "method": "POST",
+            "url": "http://jira.cubrid.org/rest/api/2/issue/CBRD-5/comment",
+            "body": {"body": "h1. Title\n{{code}}\n"},
+        }],
+    }
+    assert fake_server.requests == []
 
 
 # --------------------------------------------------------------------------- #

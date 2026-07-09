@@ -1,9 +1,8 @@
 """Korean-aware spacing for Jira wiki bodies.
 
 Jira Server can fail to recognize inline wiki markup when the marker touches
-Korean text directly, for example ``{{name}}의``.  The write commands still
-send raw Jira wiki text; this module only inserts boundary spaces around known
-inline markup spans.
+Korean text directly, for example ``{{name}}의``. Raw Jira write bodies and
+Markdown-converted write bodies both pass through this helper before upload.
 """
 
 from __future__ import annotations

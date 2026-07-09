@@ -76,7 +76,8 @@ Installs three binaries on `$PATH`:
 ## Prerequisites
 
 - **Python 3.14+**
-- **[pandoc](https://pandoc.org/)** — converts Jira wiki markup to markdown
+- **[pandoc](https://pandoc.org/)** — converts Jira wiki markup to Markdown
+  on reads and Markdown to Jira wiki markup for write bodies
 
 ```sh
 brew install pandoc          # macOS / Linuxbrew
@@ -164,22 +165,24 @@ cubrid-jira create     --project CBRD --type Bug --summary "..." \
                        [--description-file path] [--priority Major] [--assignee user] \
                        [--label l1 --label l2] [--component sql] \
                        [--link-relates CBRD-Y] [--link-blocks CBRD-Z] \
-                       [--field "QA Scenario={\"value\":\"Not Required\"}"] [--field customfield_NNN=...]
-cubrid-jira comment    CBRD-XXXXX --body-file note.md
+                       [--field "QA Scenario={\"value\":\"Not Required\"}"] [--field customfield_NNN=...] \
+                       [--from {markdown,jira}]
+cubrid-jira comment    CBRD-XXXXX --body-file note.md [--from {markdown,jira}]
 cubrid-jira comment-list   CBRD-XXXXX [--limit N]                  # list comments (read-only)
-cubrid-jira comment-update CBRD-XXXXX --id <COMMENT-ID> --body-file note.md
+cubrid-jira comment-update CBRD-XXXXX --id <COMMENT-ID> --body-file note.md [--from {markdown,jira}]
 cubrid-jira comment-delete CBRD-XXXXX --id <COMMENT-ID>            # irreversible — prints a one-line warning
 cubrid-jira link       CBRD-A --type Relates --to CBRD-B   # also Blocks | Cloners | Duplicate
 cubrid-jira transition CBRD-A [--to "In Progress"]         # omit --to to list available
 cubrid-jira assign     CBRD-A --to <username>              # --to "" to unassign
 cubrid-jira update     CBRD-A [--summary "..."] [--description-file path] \
                        [--priority Major] [--label l1 --label l2] [--component sql] \
-                       [--field "QA Scenario={\"value\":\"Complete\"}"] [--field customfield_NNN=...]
+                       [--field "QA Scenario={\"value\":\"Complete\"}"] [--field customfield_NNN=...] \
+                       [--from {markdown,jira}]
 ```
 
 `update` edits an existing issue's fields. At least one of `--summary`, `--description-file`, `--priority`, `--label`, `--component`, or `--field` is required. **`--label` and `--component` replace the full list** — they are not additive (Jira REST `fields` semantics). `--description-file -` reads from stdin.
 
-For `--body-file` and `--description-file`, write commands send raw Jira wiki text but automatically add spacing around inline markup such as `{{name}}`, `*bold*`, and `_emphasis_` when it touches Korean text, because Jira Server can fail to parse markers like `{{name}}의`.
+For `--body-file` and `--description-file`, write commands treat input as Markdown by default and convert it to Jira wiki markup before sending. Use `--from jira` when the file already contains raw Jira wiki markup. Both paths apply Korean/Jira inline spacing fixes where needed because Jira Server can fail to parse markers like `{{name}}의`.
 
 ### `--field FIELD=VALUE` — arbitrary custom fields
 
@@ -212,6 +215,12 @@ Global flags on every write subcommand:
 | `--server URL` | `http://jira.cubrid.org` | JIRA base URL. |
 | `-d`, `--dir DIR` | shared cache | Cache directory for post-write cache updates. |
 | `--output {text,json}` | `text` | Machine-readable output mode; see below. |
+
+Body input flag on `create`, `comment`, `comment-update`, and `update`:
+
+| Flag | Default | Description |
+|---|---|---|
+| `--from {markdown,jira}` | `markdown` | Input format for `--description-file` / `--body-file`. Markdown is converted to Jira wiki markup; `jira` sends raw Jira wiki markup. |
 
 ### Cache interaction on writes
 
@@ -465,7 +474,7 @@ just search CBRD-26463
 | `http.py` | `JiraClient` (basic-auth, dry-run, retries, 401 hard-fail) + `fetch_issue` read helper. **Layering rule: no `subprocess` imports.** |
 | `session.py` | `SessionClient` for the Convert wizard — manages `JSESSIONID` via `http.cookiejar.CookieJar` and adds `X-Atlassian-Token: no-check` on every mutating POST. Same dry-run semantics as `JiraClient`. **Layering rule: no `subprocess` imports.** |
 | `wizard.py` | Pure HTML parsing (`atl_token` / `guid` / `<select name="issuetype">` extraction, XSRF-rejection detection) + payload builders for the six wizard form POSTs. **Layering rule: no `urllib` imports.** |
-| `markdown.py` | Pure rendering (Jira wiki → markdown via pandoc) and `extract_related_keys`. **Layering rule: no `urllib` imports.** |
+| `markdown.py` | Pure rendering (Jira wiki ↔ Markdown via pandoc) and `extract_related_keys`. **Layering rule: no `urllib` imports.** |
 | `walk.py` | Recursive related-issue walking + on-disk cache writes. |
 | `auth.py` | Credential resolution: env → netrc → error. |
 | `cache.py` | Cache directory resolution + prefix-safe invalidation. |
@@ -478,7 +487,7 @@ The `cubrid_jira_fetcher` import path remains as a deprecation shim that re-expo
 ## Troubleshooting
 
 - **`command not found: cubrid-jira`** — install dir isn't on `$PATH`. With `uv tool install`, run `uv tool update-shell`. With `pipx`, run `pipx ensurepath`. Restart the shell.
-- **`pandoc: command not found`** — install pandoc (see Prerequisites). Without pandoc, descriptions/comments fall through as plain text.
+- **`pandoc: command not found`** — install pandoc (see Prerequisites). Reads fall through as plain text if pandoc is missing; Markdown write bodies fail before sending. Use `--from jira` only when the file already contains Jira wiki markup.
 - **`Error: Auth failed (HTTP 401)`** — do NOT retry. See [CAPTCHA-lockout warning](#-cleartext--captcha-lockout-warnings). Solve the CAPTCHA via the JIRA web UI, then fix your credentials.
 - **Redirect loop / HTTPS errors** — JIRA responses are expected over plain HTTP; do not force HTTPS at the proxy level.
 - **Stale cache** — `cubrid-jira search CBRD-XXXXX --force`, or just delete the cache directory.

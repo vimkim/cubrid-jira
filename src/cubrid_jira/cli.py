@@ -43,7 +43,11 @@ from cubrid_jira.http import (
     parse_issue_key,
     search_issues,
 )
-from cubrid_jira.markdown import format_search_results_markdown
+from cubrid_jira.markdown import (
+    MarkdownConversionError,
+    format_search_results_markdown,
+    markdown_to_jira_body,
+)
 from cubrid_jira.session import SessionClient
 from cubrid_jira.spacing import normalize_korean_jira_spacing
 from cubrid_jira.walk import fetch_recursive, save_issue
@@ -236,6 +240,32 @@ def _make_session(args) -> SessionClient:
     )
 
 
+def _render_jira_body(text: str, input_format: str) -> str:
+    if input_format == "jira":
+        return normalize_korean_jira_spacing(text)
+    if input_format == "markdown":
+        return markdown_to_jira_body(text)
+    raise ValueError(f"unknown body input format: {input_format!r}")
+
+
+def _read_and_render_jira_body(
+    body_file: str,
+    input_format: str,
+    *,
+    allow_stdin: bool = False,
+) -> str:
+    if allow_stdin and body_file == "-":
+        text = sys.stdin.read()
+    else:
+        text = Path(body_file).read_text(encoding="utf-8")
+
+    try:
+        return _render_jira_body(text, input_format)
+    except MarkdownConversionError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+
 def _resolve_custom_fields(args, client: JiraClient) -> dict[str, object]:
     """Translate ``--field FIELD=VALUE`` repetitions into a ``customfield_NNN``
     payload subdict.
@@ -401,8 +431,9 @@ def cmd_jql(args) -> None:
 def cmd_create(args) -> None:
     description = None
     if args.description_file:
-        description = normalize_korean_jira_spacing(
-            Path(args.description_file).read_text(encoding="utf-8")
+        description = _read_and_render_jira_body(
+            args.description_file,
+            args.input_format,
         )
 
     client = _make_client(args)
@@ -477,8 +508,9 @@ def cmd_create(args) -> None:
 
 def cmd_comment(args) -> None:
     key = parse_issue_key(args.issue)
-    body_text = normalize_korean_jira_spacing(
-        Path(args.body_file).read_text(encoding="utf-8")
+    body_text = _read_and_render_jira_body(
+        args.body_file,
+        args.input_format,
     )
 
     client = _make_client(args)
@@ -549,12 +581,11 @@ def cmd_comment_list(args) -> None:
 
 def cmd_comment_update(args) -> None:
     key = parse_issue_key(args.issue)
-    if args.body_file == "-":
-        body_text = normalize_korean_jira_spacing(sys.stdin.read())
-    else:
-        body_text = normalize_korean_jira_spacing(
-            Path(args.body_file).read_text(encoding="utf-8")
-        )
+    body_text = _read_and_render_jira_body(
+        args.body_file,
+        args.input_format,
+        allow_stdin=True,
+    )
 
     client = _make_client(args)
     client.request(
@@ -718,12 +749,11 @@ def cmd_update(args) -> None:
 
     description = None
     if args.description_file:
-        if args.description_file == "-":
-            description = normalize_korean_jira_spacing(sys.stdin.read())
-        else:
-            description = normalize_korean_jira_spacing(
-                Path(args.description_file).read_text(encoding="utf-8")
-            )
+        description = _read_and_render_jira_body(
+            args.description_file,
+            args.input_format,
+            allow_stdin=True,
+        )
 
     client = _make_client(args)
     try:
@@ -1235,6 +1265,19 @@ def _add_write_globals(p: argparse.ArgumentParser) -> None:
     )
 
 
+def _add_body_input_flag(p: argparse.ArgumentParser, target: str) -> None:
+    p.add_argument(
+        "--from",
+        dest="input_format",
+        choices=("markdown", "jira"),
+        default="markdown",
+        help=(
+            f"Input format for {target}: markdown converts to Jira wiki markup "
+            "(default); jira sends raw Jira wiki markup with Korean spacing fixes."
+        ),
+    )
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="cubrid-jira",
@@ -1297,7 +1340,8 @@ def _build_parser() -> argparse.ArgumentParser:
     p_create.add_argument("--type", required=True, help="Issue type, e.g. Bug, Task.")
     p_create.add_argument("--summary", required=True, help="Issue summary (title).")
     p_create.add_argument("--description-file", metavar="PATH",
-                          help="File whose contents become the issue description.")
+                          help="Markdown file for the issue description; "
+                               "use --from jira for raw Jira wiki markup.")
     p_create.add_argument("--priority",
                           help="One of: Blocker, Critical, Major, Minor, Trivial.")
     p_create.add_argument("--assignee", help="JIRA username to assign on creation.")
@@ -1312,13 +1356,16 @@ def _build_parser() -> argparse.ArgumentParser:
                           metavar="KEY",
                           help="After creation, link the new issue as 'Blocks' to KEY.")
     _add_field_flag(p_create)
+    _add_body_input_flag(p_create, "--description-file")
     _add_write_globals(p_create)
     p_create.set_defaults(func=cmd_create)
 
     p_comment = sub.add_parser("comment", help="Add a comment to an issue.")
     p_comment.add_argument("issue", help="Issue key, e.g. CBRD-12345.")
     p_comment.add_argument("--body-file", required=True, metavar="PATH",
-                           help="File whose contents become the comment body.")
+                           help="Markdown file for the comment body; "
+                                "use --from jira for raw Jira wiki markup.")
+    _add_body_input_flag(p_comment, "--body-file")
     _add_write_globals(p_comment)
     p_comment.set_defaults(func=cmd_comment)
 
@@ -1346,8 +1393,10 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p_comment_update.add_argument(
         "--body-file", required=True, metavar="PATH",
-        help="File whose contents become the new comment body; '-' reads stdin.",
+        help="Markdown file for the new comment body; '-' reads stdin. "
+             "Use --from jira for raw Jira wiki markup.",
     )
+    _add_body_input_flag(p_comment_update, "--body-file")
     _add_write_globals(p_comment_update)
     p_comment_update.set_defaults(func=cmd_comment_update)
 
@@ -1400,8 +1449,9 @@ def _build_parser() -> argparse.ArgumentParser:
     p_update.add_argument("--summary", default=None,
                           help="New issue summary (title).")
     p_update.add_argument("--description-file", metavar="PATH", default=None,
-                          help="File whose contents replace the issue description. "
-                               "Use '-' to read from stdin.")
+                          help="Markdown file whose contents replace the issue "
+                               "description. Use '-' to read from stdin; "
+                               "use --from jira for raw Jira wiki markup.")
     p_update.add_argument("--priority", default=None,
                           help="One of: Blocker, Critical, Major, Minor, Trivial.")
     p_update.add_argument("--label", action="append", dest="labels", metavar="LABEL",
@@ -1413,6 +1463,7 @@ def _build_parser() -> argparse.ArgumentParser:
                           help="Repeat for multiple components. NOTE: replaces the "
                                "full component list.")
     _add_field_flag(p_update)
+    _add_body_input_flag(p_update, "--description-file")
     _add_write_globals(p_update)
     p_update.set_defaults(func=cmd_update)
 
