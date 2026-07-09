@@ -2,7 +2,7 @@
 
 Subcommands
 -----------
-search      Cache-first read of ONE issue by key (existing behavior).
+search      Live-first read of ONE issue by key; refreshes cached markdown.
 jql         GET  /rest/api/2/search — list issues matching a JQL query.
 create      POST /rest/api/2/issue
 comment     POST /rest/api/2/issue/{key}/comment
@@ -359,7 +359,8 @@ def _emit(args, client: JiraClient, live_result: dict | None) -> None:
 def _find_cached(key: str, directory: Path) -> list[Path]:
     if not directory.exists():
         return []
-    return sorted(directory.glob(f"{key}*.md"))
+    paths = [*directory.glob(f"{key}.md"), *directory.glob(f"{key}-*.md")]
+    return sorted(set(paths))
 
 
 def cmd_search(args) -> None:
@@ -372,17 +373,22 @@ def cmd_search(args) -> None:
     out_dir = resolve_cache_dir(args.dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    if not args.force:
+    if getattr(args, "cache_only", False):
         cached = _find_cached(key, out_dir)
         if cached:
             print(f"# Found cached: {cached[0].name}", file=sys.stderr)
             print(cached[0].read_text(encoding="utf-8"))
             return
+        print(f"Error: No cached markdown for {key}", file=sys.stderr)
+        sys.exit(1)
 
     print(f"# Fetching {key} from jira.cubrid.org ...", file=sys.stderr)
     max_depth = 0 if args.no_recurse else 1
     visited: set[str] = set()
-    fetch_recursive(key, max_depth, visited, out_dir)
+    fetched = fetch_recursive(key, max_depth, visited, out_dir, force=True)
+    if not fetched:
+        print(f"Error: Failed to fetch {key}", file=sys.stderr)
+        sys.exit(1)
 
     cached = _find_cached(key, out_dir)
     if cached:
@@ -1299,9 +1305,16 @@ def _build_parser() -> argparse.ArgumentParser:
              "~/.local/share/cubrid-jira/issues/).",
     )
     p_search.add_argument("--no-recurse", action="store_true",
-                          help="On cache miss, only fetch the requested issue.")
-    p_search.add_argument("--force", action="store_true",
-                          help="Bypass cache and re-fetch.")
+                          help="Only fetch the requested issue.")
+    search_freshness = p_search.add_mutually_exclusive_group()
+    search_freshness.add_argument(
+        "--force", action="store_true",
+        help="Deprecated compatibility flag; search fetches live by default.",
+    )
+    search_freshness.add_argument(
+        "--cache-only", "--offline", action="store_true", dest="cache_only",
+        help="Read cached markdown without contacting JIRA.",
+    )
     p_search.set_defaults(func=cmd_search)
 
     p_jql = sub.add_parser(

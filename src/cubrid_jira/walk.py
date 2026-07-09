@@ -41,9 +41,9 @@ def fetch_recursive(
     raw_json: bool = False,
     force: bool = False,
     current_depth: int = 0,
-) -> None:
+) -> bool:
     if key in visited or current_depth > max_depth:
-        return
+        return False
     visited.add(key)
 
     path = issue_path(key, out_dir, raw_json)
@@ -59,12 +59,12 @@ def fetch_recursive(
                         rkey, max_depth, visited, out_dir,
                         raw_json, force, current_depth + 1,
                     )
-        return
+        return True
 
     print(f"Fetching {key} (depth {current_depth})...", file=sys.stderr)
     data = fetch_issue(key)
     if not data:
-        return
+        return False
 
     save_issue(data, out_dir, raw_json=raw_json)
     print(f"  Saved -> {path}", file=sys.stderr)
@@ -75,6 +75,7 @@ def fetch_recursive(
                 rkey, max_depth, visited, out_dir,
                 raw_json, force, current_depth + 1,
             )
+    return True
 
 
 def bulk_fetch_main() -> None:
@@ -113,7 +114,12 @@ def bulk_fetch_main() -> None:
     parser.add_argument(
         "--force",
         action="store_true",
-        help="Re-download and overwrite already-saved issues",
+        help="Deprecated compatibility flag; re-download is the default.",
+    )
+    parser.add_argument(
+        "--skip-existing",
+        action="store_true",
+        help="Keep already-saved issue files and only fetch missing ones.",
     )
     args = parser.parse_args()
 
@@ -130,7 +136,7 @@ def bulk_fetch_main() -> None:
     visited: set[str] = set()
     fetch_recursive(
         key, max_depth, visited, out_dir,
-        raw_json=args.raw_json, force=args.force,
+        raw_json=args.raw_json, force=args.force or not args.skip_existing,
     )
     print(
         f"\nDone. {len(visited)} issue(s) in {out_dir}/: {', '.join(sorted(visited))}"

@@ -19,12 +19,12 @@ test-live:
 
 # ---- read ------------------------------------------------------------------- #
 
-# Cache-first lookup for one issue; prints markdown to stdout.
+# Live lookup for one issue; refreshes cache and prints markdown to stdout.
 # Usage: just search CBRD-26463
 search issue:
     uv run cubrid-jira search {{issue}}
 
-# Force re-fetch a single issue (bypass cache).
+# Compatibility alias for old force-refresh workflows.
 # Usage: just search-force CBRD-26463
 search-force issue:
     uv run cubrid-jira search {{issue}} --force

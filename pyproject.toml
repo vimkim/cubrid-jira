@@ -1,7 +1,7 @@
 [project]
 name = "cubrid-jira"
 version = "1.0.0"
-description = "CUBRID JIRA CLI: cache-first reads and dry-run-default writes (create / comment / link / transition / assign)."
+description = "CUBRID JIRA CLI: live-first reads and dry-run-default writes (create / comment / link / transition / assign)."
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = []

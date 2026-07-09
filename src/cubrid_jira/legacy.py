@@ -29,8 +29,8 @@ def search_main() -> None:
     _warn("cubrid-jira-search", "cubrid-jira search")
     parser = argparse.ArgumentParser(
         description=(
-            "[deprecated] Search local cache for a CUBRID JIRA issue; fetch from web "
-            "if missing. Equivalent to: cubrid-jira search ARGS"
+            "[deprecated] Fetch a CUBRID JIRA issue live and update the local "
+            "cache. Equivalent to: cubrid-jira search ARGS"
         ),
     )
     parser.add_argument("issue", help="Issue key (e.g. CBRD-12345) or full browse URL")
@@ -40,11 +40,16 @@ def search_main() -> None:
     )
     parser.add_argument(
         "--no-recurse", action="store_true",
-        help="When fetching, only fetch the given issue (no related issues)",
+        help="Only fetch the given issue (no related issues)",
     )
-    parser.add_argument(
+    freshness = parser.add_mutually_exclusive_group()
+    freshness.add_argument(
         "--force", action="store_true",
-        help="Re-fetch even if cached",
+        help="Deprecated compatibility flag; search fetches live by default.",
+    )
+    freshness.add_argument(
+        "--cache-only", "--offline", action="store_true", dest="cache_only",
+        help="Read cached markdown without contacting JIRA.",
     )
     args = parser.parse_args()
     cmd_search(args)

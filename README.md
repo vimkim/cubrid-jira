@@ -2,7 +2,7 @@
 
 A CUBRID JIRA CLI for `http://jira.cubrid.org` with three workflow buckets:
 
-* **cache-first reads** (`search`) — one issue by key, markdown to stdout, no network on a cache hit.
+* **live-first reads** (`search`) — one issue by key, markdown to stdout, cache updated on every normal read.
 * **JQL list search** (`jql`) — list issues matching a JQL query as a markdown table (or `--output json`); read-only, no credentials.
 * **field writes** (`create`, `comment`, `comment-list`, `comment-update`, `comment-delete`, `link`, `transition`, `assign`, `update`) — dry-run by default; `--yes` to send.
 * **structural writes** (`convert-to-issue`, `convert-to-subtask`, `reparent`) — drive the JIRA Convert wizard for the operations REST silently no-ops on; same dry-run contract.
@@ -96,17 +96,19 @@ Prints one issue's markdown to **stdout**; progress goes to stderr, so piping st
 ```sh
 cubrid-jira search CBRD-26463
 cubrid-jira search http://jira.cubrid.org/browse/CBRD-26463
-cubrid-jira search CBRD-26463 --force         # bypass cache
-cubrid-jira search CBRD-26463 --no-recurse    # don't walk related on miss
+cubrid-jira search CBRD-26463 --cache-only    # offline/cache-only read
+cubrid-jira search CBRD-26463 --force         # deprecated; live fetch is default
+cubrid-jira search CBRD-26463 --no-recurse    # don't walk related issues
 cubrid-jira search CBRD-26463 --dir /tmp/jira # override cache directory
 ```
 
 How it works:
 
-1. Look for `CBRD-26463*.md` in the cache directory.
-2. **Cache hit** → print it. No network.
-3. **Cache miss** → fetch the issue (+ 1 level of related issues) into the cache, then print.
-4. Exit non-zero on fetch failure.
+1. Fetch `CBRD-26463` from JIRA.
+2. Save/overwrite `CBRD-26463.md` in the cache directory.
+3. Print the freshly fetched markdown.
+4. Exit non-zero on fetch failure; stale cached markdown is not printed as a fallback.
+5. `--cache-only` / `--offline` is the explicit no-network mode and prints cached markdown only.
 
 ### Cache directory
 
@@ -126,8 +128,8 @@ echo 'export CUBRID_JIRA_DIR="$HOME/.local/share/cubrid-jira/issues"' >> ~/.bash
 
 ## List flow — `cubrid-jira jql`
 
-Run a JQL query and list the matching issues. Unlike `search` (one issue by
-key, cache-first), `jql` always hits `/rest/api/2/search` live and is
+Run a JQL query and list the matching issues. Like `search` (one issue by
+key), `jql` always hits `/rest/api/2/search` live and is
 **read-only and unauthenticated** — same anonymous access as `search`'s fetch.
 
 ```sh
@@ -382,7 +384,7 @@ KEY=$(cubrid-jira create \
     --link-relates CBRD-26517 \
     --yes --output json | jq -r .key)
 echo "Created $KEY"
-cubrid-jira search "$KEY"   # immediate cache hit, no extra fetch
+cubrid-jira search "$KEY"   # re-fetches live and refreshes the cache
 ```
 
 ### Revise the description of an existing issue
@@ -440,10 +442,11 @@ If the reverse half fails after the forward half succeeded, `reparent` prints th
 
 ## Caching behavior
 
-The cache directory is shared by `cubrid-jira search` and the legacy `cubrid-jira-fetch` bulk tool. Both honour the same precedence (`--dir`, `$CUBRID_JIRA_DIR`, default). A markdown file written by one is served immediately by the other.
+The cache directory is shared by `cubrid-jira search` and the legacy `cubrid-jira-fetch` bulk tool. Normal reads update the cached markdown before printing, so stale cache is only used when explicitly requested.
 
-- `cubrid-jira search KEY` — cache hit prints from disk with no network; cache miss fetches one issue plus one level of related issues (`--no-recurse` disables the walk).
-- `cubrid-jira-fetch KEY --depth N` *(deprecated)* — bulk-fetch a transitive closure up to depth `N`. Already-saved files are skipped, so a later `--depth 2` run extends a prior `--depth 1` run; pass `--force` to re-download.
+- `cubrid-jira search KEY` — fetches one issue plus one level of related issues (`--no-recurse` disables the walk), overwrites cached markdown, then prints it.
+- `cubrid-jira search KEY --cache-only` — prints cached markdown without network access, failing if the issue is not cached.
+- `cubrid-jira-fetch KEY --depth N` *(deprecated)* — bulk-fetches a transitive closure up to depth `N` and overwrites already-saved files by default. Pass `--skip-existing` for the old cache-extending behavior.
 - Field-write commands invalidate the affected key(s) (`link` invalidates both sides); structural-write commands invalidate 2–3 keys per the table above.
 
 ---
@@ -454,7 +457,7 @@ The cache directory is shared by `cubrid-jira search` and the legacy `cubrid-jir
 git clone https://github.com/vimkim/cubrid-jira.git
 cd cubrid-jira
 uv sync --dev
-uv run pytest                # ~78 unit + mocked-integration tests in ~0.25s
+uv run pytest                # unit + mocked-integration tests
 uv run pytest -m live        # also hits the real jira.cubrid.org (read-only)
 uv run cubrid-jira search CBRD-1
 ```
@@ -490,5 +493,5 @@ The `cubrid_jira_fetcher` import path remains as a deprecation shim that re-expo
 - **`pandoc: command not found`** — install pandoc (see Prerequisites). Reads fall through as plain text if pandoc is missing; Markdown write bodies fail before sending. Use `--from jira` only when the file already contains Jira wiki markup.
 - **`Error: Auth failed (HTTP 401)`** — do NOT retry. See [CAPTCHA-lockout warning](#-cleartext--captcha-lockout-warnings). Solve the CAPTCHA via the JIRA web UI, then fix your credentials.
 - **Redirect loop / HTTPS errors** — JIRA responses are expected over plain HTTP; do not force HTTPS at the proxy level.
-- **Stale cache** — `cubrid-jira search CBRD-XXXXX --force`, or just delete the cache directory.
+- **Offline cache reads** — use `cubrid-jira search CBRD-XXXXX --cache-only`; normal `search` fetches live and refreshes cached markdown.
 - **Deprecation warning when importing `cubrid_jira_fetcher`** — expected; rename your import to `cubrid_jira`.
