@@ -4,6 +4,7 @@ A CUBRID JIRA CLI for `http://jira.cubrid.org` with three workflow buckets:
 
 * **live-first reads** (`search`) — one issue by key, markdown to stdout, cache updated on every normal read.
 * **JQL list search** (`jql`) — list issues matching a JQL query as a markdown table (or `--output json`); read-only, no credentials.
+* **attachment download** (`attachment`) — download an issue's attachments to a directory (or `--list` metadata only), with a `--max-bytes` gate so a multi-GB core never gets pulled; prints a per-file manifest (`--output json`).
 * **field writes** (`create`, `comment`, `comment-list`, `comment-update`, `comment-delete`, `link`, `transition`, `assign`, `update`) — dry-run by default; `--yes` to send.
 * **structural writes** (`convert-to-issue`, `convert-to-subtask`, `reparent`) — drive the JIRA Convert wizard for the operations REST silently no-ops on; same dry-run contract.
 
@@ -17,7 +18,7 @@ If you are an autonomous agent running in a shell, this is everything you need:
 
 ```text
 Canonical command   : cubrid-jira <subcommand> [args…]
-Subcommands         : read              search (one issue by key) | jql (list by query)
+Subcommands         : read              search (one issue by key) | jql (list by query) | attachment (download files)
                       field-write       create | comment | comment-list | comment-update | comment-delete |
                                         link | transition | assign | update
                       structural-write  convert-to-issue | convert-to-subtask | reparent
