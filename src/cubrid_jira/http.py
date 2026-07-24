@@ -19,7 +19,7 @@ import urllib.parse
 import urllib.request
 from typing import Any
 
-from cubrid_jira.auth import mask_password
+from cubrid_jira.auth import mask_password, resolve_credentials_optional
 
 JIRA_BASE = "http://jira.cubrid.org"
 REST_API = f"{JIRA_BASE}/rest/api/2/issue"
@@ -52,15 +52,34 @@ def basic_auth_header(user: str, password: str) -> str:
     return "Basic " + base64.b64encode(raw).decode("ascii")
 
 
-def fetch_issue(key: str) -> dict:
-    """Unauthenticated GET for an issue's full JSON.
+def _read_headers() -> dict[str, str]:
+    """Headers for a read GET, authenticated when a credential is available.
 
-    Kept separate from :class:`JiraClient` because the read-only fetch flow
-    must not require credentials — the public CUBRID JIRA happily serves
-    issue JSON without auth.
+    Approach (A) from ``docs/authenticated-reads-for-nonpublic-projects.md``:
+    if :func:`resolve_credentials_optional` yields a credential, attach basic
+    auth to the read directly (single attempt, no anonymous probe first);
+    otherwise stay anonymous so public projects keep working. This never sends
+    an anonymous request before an authenticated one, so it adds no CAPTCHA
+    lockout risk — and an anonymous ``401`` carries no credentials to lock.
+    """
+    headers = {"Accept": "application/json"}
+    creds = resolve_credentials_optional(JIRA_BASE)
+    if creds is not None:
+        user, pw = creds
+        headers["Authorization"] = basic_auth_header(user, pw)
+    return headers
+
+
+def fetch_issue(key: str) -> dict:
+    """GET an issue's full JSON, authenticating when a credential is available.
+
+    Kept separate from :class:`JiraClient` because the read flow does not
+    *require* credentials — the public CUBRID JIRA serves issue JSON
+    anonymously. When a credential resolves (env or ``~/.netrc``) it is sent so
+    login-required projects (e.g. ``CUBRIDQA``) are readable too.
     """
     url = f"{REST_API}/{key}?expand=renderedFields"
-    req = urllib.request.Request(url, headers={"Accept": "application/json"})
+    req = urllib.request.Request(url, headers=_read_headers())
     try:
         with urllib.request.urlopen(req, timeout=15) as resp:
             return json.loads(resp.read().decode())
@@ -78,12 +97,13 @@ def search_issues(
     max_results: int = 50,
     start_at: int = 0,
 ) -> dict:
-    """Unauthenticated JQL search via ``/rest/api/2/search``.
+    """JQL search via ``/rest/api/2/search``, authenticated when possible.
 
     Returns the parsed search response — ``{"total", "startAt",
-    "maxResults", "issues": [...]}``. Like :func:`fetch_issue`, this is a
-    read-only flow that needs no credentials: the public CUBRID JIRA serves
-    search results anonymously.
+    "maxResults", "issues": [...]}``. Like :func:`fetch_issue`, the read does
+    not *require* credentials (the public CUBRID JIRA serves search results
+    anonymously), but sends them when they resolve so login-required projects
+    (e.g. ``CUBRIDQA``) are searchable too.
 
     Unlike ``fetch_issue`` (which swallows errors and returns ``{}``), this
     raises :class:`JiraError` on HTTP/network failure so callers can tell a
@@ -101,7 +121,7 @@ def search_issues(
         }
     )
     url = f"{SEARCH_API}?{query}"
-    req = urllib.request.Request(url, headers={"Accept": "application/json"})
+    req = urllib.request.Request(url, headers=_read_headers())
     attempts = 0
     while True:
         attempts += 1

@@ -47,6 +47,27 @@ def test_jql_search_returns_real_results():
 
 
 @pytest.mark.live
+def test_authenticated_read_of_nonpublic_project():
+    """A login-required project (CUBRIDQA) reads only when a credential exists.
+
+    Gated on credential availability so the suite still passes on a machine
+    with no CUBRID JIRA login. CUBRIDQA-1425 is the issue from the original
+    incident report (docs/authenticated-reads-for-nonpublic-projects.md).
+    """
+    from cubrid_jira.auth import resolve_credentials_optional
+
+    if resolve_credentials_optional() is None:
+        pytest.skip("no CUBRID JIRA credential (env or ~/.netrc) configured")
+
+    data = fetch_issue("CUBRIDQA-1425")
+    assert data.get("key") == "CUBRIDQA-1425", (
+        "authenticated read of a non-public project returned nothing"
+    )
+    result = search_issues("key = CUBRIDQA-1425", max_results=1)
+    assert result.get("total", 0) >= 1
+
+
+@pytest.mark.live
 def test_reparent_roundtrip_against_live_server(capsys):
     """Round-trip ``reparent`` against the real server, then move back.
 

@@ -49,7 +49,7 @@ Full background, traps, and curl-only smoke test:
 
 ```text
 cli.py        parent argparse + dispatch + payload builders
-http.py       JiraClient (basic-auth, dry-run, retries) + fetch_issue / search_issues (unauth GET)
+http.py       JiraClient (basic-auth, dry-run, retries) + fetch_issue / search_issues (GET, auth when creds resolve, else anon)
 session.py    SessionClient — JSESSIONID cookies + X-Atlassian-Token for wizard POSTs
 wizard.py     pure HTML parsing + form-payload builders for the Convert wizard
 markdown.py   Jira-wiki → markdown rendering; pure
