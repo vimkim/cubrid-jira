@@ -130,8 +130,10 @@ echo 'export CUBRID_JIRA_DIR="$HOME/.local/share/cubrid-jira/issues"' >> ~/.bash
 ## List flow — `cubrid-jira jql`
 
 Run a JQL query and list the matching issues. Like `search` (one issue by
-key), `jql` always hits `/rest/api/2/search` live and is
-**read-only and unauthenticated** — same anonymous access as `search`'s fetch.
+key), `jql` always hits `/rest/api/2/search` live and is **read-only**. It
+authenticates when a credential resolves (env or `~/.netrc`) so login-required
+projects like `CUBRIDQA` are searchable, and falls back to anonymous access for
+public projects otherwise — same as `search`'s fetch.
 
 ```sh
 cubrid-jira jql "assignee = jdoe AND status not in (Resolved, Closed, Done) ORDER BY updated DESC"
@@ -274,7 +276,7 @@ Numeric issuetype IDs (Sub-task, Task, Bug, …) vary per JIRA install. None of 
 
 Like every other write subcommand, all three default to **dry-run**. Without `--yes` they:
 
-1. Fetch the issue's current metadata over the same unauthenticated REST endpoint `search` uses.
+1. Fetch the issue's current metadata over the same REST endpoint `search` uses (authenticated when a credential is available).
 2. Run the pre-flight refusals.
 3. Print the planned wizard POSTs with `atl_token=<extracted-at-runtime>`, `guid=<extracted-at-runtime>`, and `issuetype=<resolved-at-runtime>` placeholders.
 4. Never log in, never contact the wizard endpoints, never touch credentials.

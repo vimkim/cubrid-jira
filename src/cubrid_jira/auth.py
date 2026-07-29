@@ -19,7 +19,16 @@ def _host_of(server: str) -> str:
     return host or "jira.cubrid.org"
 
 
-def resolve_credentials(server: str = "http://jira.cubrid.org") -> tuple[str, str]:
+def resolve_credentials_optional(
+    server: str = "http://jira.cubrid.org",
+) -> tuple[str, str] | None:
+    """Resolve credentials without exiting when none are configured.
+
+    Same env → ~/.netrc lookup order as :func:`resolve_credentials`, but
+    returns ``None`` instead of exiting when nothing is found. The read path
+    uses this so it can authenticate when a credential is available and fall
+    back to an anonymous GET (public projects) when it is not.
+    """
     user = os.environ.get("CUBRID_JIRA_USER")
     pw = os.environ.get("CUBRID_JIRA_PASSWORD")
     if user and pw:
@@ -38,6 +47,15 @@ def resolve_credentials(server: str = "http://jira.cubrid.org") -> tuple[str, st
             if n_user and n_pw:
                 return n_user, n_pw
 
+    return None
+
+
+def resolve_credentials(server: str = "http://jira.cubrid.org") -> tuple[str, str]:
+    creds = resolve_credentials_optional(server)
+    if creds is not None:
+        return creds
+
+    host = _host_of(server)
     print(
         "Error: No CUBRID JIRA credentials found.\n"
         "  Set environment variables:\n"
