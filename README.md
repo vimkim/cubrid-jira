@@ -77,14 +77,21 @@ Installs three binaries on `$PATH`:
 ## Prerequisites
 
 - **Python 3.14+**
-- **[pandoc](https://pandoc.org/)** — converts Jira wiki markup to Markdown
-  on reads and Markdown to Jira wiki markup for write bodies
+- **[pandoc](https://pandoc.org/) 2.9.1+** — converts Jira wiki markup to Markdown
+  on reads and Markdown to Jira wiki markup for write bodies. The `jira` reader
+  landed in 2.9.1 and the writer in 2.7.3; **2.19+** is recommended because 2.9.1's
+  writer drops the header row of a Markdown table. Check the capability rather than
+  the binary — `pandoc --list-input-formats | grep -qx jira` — since some distro
+  packages are far older (RHEL 8 ships 2.0.6, which has neither format).
 
 ```sh
 brew install pandoc          # macOS / Linuxbrew
 sudo apt install pandoc      # Debian / Ubuntu
-sudo dnf install pandoc      # Fedora / RHEL
+sudo dnf install pandoc      # Fedora / RHEL — check the version, 8.x ships 2.0.6
 ```
+
+Older pandoc is not fatal: reads fall back to raw Jira wiki markup with a warning,
+and only Markdown write bodies need the converter.
 
 Optional: [`uv`](https://github.com/astral-sh/uv), [`just`](https://github.com/casey/just).
 
@@ -493,7 +500,8 @@ The `cubrid_jira_fetcher` import path remains as a deprecation shim that re-expo
 ## Troubleshooting
 
 - **`command not found: cubrid-jira`** — install dir isn't on `$PATH`. With `uv tool install`, run `uv tool update-shell`. With `pipx`, run `pipx ensurepath`. Restart the shell.
-- **`pandoc: command not found`** — install pandoc (see Prerequisites). Reads fall through as plain text if pandoc is missing; Markdown write bodies fail before sending. Use `--from jira` only when the file already contains Jira wiki markup.
+- **`pandoc: command not found`** — install pandoc (see Prerequisites). Markdown write bodies fail before sending; reads still work, falling back to raw Jira wiki markup. Use `--from jira` only when the file already contains Jira wiki markup.
+- **`Warning: pandoc cannot convert Jira wiki markup`, and bodies show `h2.` / `||table||`** — pandoc is present but has no `jira` reader (see Prerequisites). Reads are complete, just unconverted; upgrade pandoc to get Markdown back.
 - **`Error: Auth failed (HTTP 401)`** — do NOT retry. See [CAPTCHA-lockout warning](#-cleartext--captcha-lockout-warnings). Solve the CAPTCHA via the JIRA web UI, then fix your credentials.
 - **Redirect loop / HTTPS errors** — JIRA responses are expected over plain HTTP; do not force HTTPS at the proxy level.
 - **Offline cache reads** — use `cubrid-jira search CBRD-XXXXX --cache-only`; normal `search` fetches live and refreshes cached markdown.
