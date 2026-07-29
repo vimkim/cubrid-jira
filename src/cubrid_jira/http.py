@@ -211,6 +211,39 @@ class JiraClient:
                     continue
                 raise JiraError(f"Network error talking to {url}: {reason}") from e
 
+    def download(self, url: str, dest: str) -> int:
+        """Authenticated streamed GET of a full attachment URL to ``dest``.
+
+        ``url`` is an absolute attachment ``content`` URL (as returned in an
+        issue's ``attachment`` field), not a REST path. Streams the body to
+        ``dest`` so a large file never sits fully in memory, and returns the
+        number of bytes written. A GET, so it runs even in dry-run mode.
+        Raises :class:`JiraError` (carrying the HTTP ``code``) on failure.
+        """
+        req = urllib.request.Request(
+            url,
+            headers={"Authorization": basic_auth_header(self.user, self.password)},
+        )
+        try:
+            written = 0
+            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                with open(dest, "wb") as fh:
+                    while True:
+                        chunk = resp.read(65536)
+                        if not chunk:
+                            break
+                        fh.write(chunk)
+                        written += len(chunk)
+            return written
+        except urllib.error.HTTPError as e:
+            raise JiraError(
+                f"Download failed (HTTP {e.code}) for {url}: {e.reason}",
+                code=e.code,
+            ) from e
+        except urllib.error.URLError as e:
+            reason = getattr(e, "reason", e)
+            raise JiraError(f"Network error downloading {url}: {reason}") from e
+
     # -- internals ------------------------------------------------------- #
 
     def _real_headers(self) -> dict[str, str]:

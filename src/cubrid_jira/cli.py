@@ -431,6 +431,92 @@ def cmd_jql(args) -> None:
 
 
 # --------------------------------------------------------------------------- #
+# attachment (download an issue's attachments)
+# --------------------------------------------------------------------------- #
+
+def _default_attachment_dir(key: str) -> Path:
+    return Path.home() / ".local" / "share" / "cubrid-jira" / "attachments" / key
+
+
+def _print_attachment_manifest(key, manifest, output, out_dir=None):
+    if output == "json":
+        obj = {"issue": key, "count": len(manifest)}
+        if out_dir is not None:
+            obj["out_dir"] = str(out_dir)
+        obj["attachments"] = manifest
+        print(json.dumps(obj, ensure_ascii=False))
+        return
+    if not manifest:
+        print(f"# {key}: no attachments", file=sys.stderr)
+        return
+    if out_dir is not None:
+        print(f"# {key}: {len(manifest)} attachment(s) -> {out_dir}", file=sys.stderr)
+    for m in manifest:
+        if "downloaded" not in m:  # --list
+            print(f"{m.get('size', 0):>10}  {m.get('mimeType') or '?':<28}  {m.get('filename')}")
+        elif m["downloaded"]:
+            print(f"[OK]   {m['filename']} ({m.get('size', 0)} bytes)")
+        else:
+            print(f"[SKIP] {m['filename']} ({m.get('size', 0)} bytes) — {m.get('skipped', '')}")
+
+
+def cmd_attachment(args) -> None:
+    key = parse_issue_key(args.issue)
+    try:
+        result = search_issues(f"key = {key}", fields="attachment", max_results=1)
+    except JiraError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(_exit_code_for_http(e.code))
+
+    issues = result.get("issues") or []
+    atts = ((issues[0].get("fields") or {}).get("attachment") if issues else None) or []
+    output = _output_format(args)
+
+    if args.list:
+        manifest = [
+            {
+                "filename": a.get("filename"),
+                "size": a.get("size"),
+                "mimeType": a.get("mimeType"),
+                "content": a.get("content"),
+            }
+            for a in atts
+        ]
+        _print_attachment_manifest(key, manifest, output)
+        return
+
+    out_dir = Path(args.out) if args.out else _default_attachment_dir(key)
+    if atts:
+        out_dir.mkdir(parents=True, exist_ok=True)
+    client = _make_client(args) if atts else None
+
+    manifest = []
+    for a in atts:
+        name = a.get("filename") or str(a.get("id"))
+        size = a.get("size") or 0
+        entry = {
+            "filename": name,
+            "size": size,
+            "mimeType": a.get("mimeType"),
+            "path": None,
+            "downloaded": False,
+        }
+        if size > args.max_bytes:
+            entry["skipped"] = f"oversize (> {args.max_bytes} bytes)"
+        else:
+            dest = out_dir / name
+            try:
+                client.download(a.get("content"), str(dest))
+                entry["downloaded"] = True
+                entry["path"] = str(dest)
+            except JiraError as e:
+                entry["skipped"] = f"download failed: {e}"
+        manifest.append(entry)
+
+    _print_attachment_manifest(key, manifest, output, out_dir=out_dir if atts else None)
+
+
+# --------------------------------------------------------------------------- #
 # create
 # --------------------------------------------------------------------------- #
 
@@ -1347,6 +1433,38 @@ def _build_parser() -> argparse.ArgumentParser:
              "raw /rest/api/2/search response on one line (for jq/agents).",
     )
     p_jql.set_defaults(func=cmd_jql)
+
+    p_attach = sub.add_parser(
+        "attachment",
+        help="Download an issue's attachments (files + metadata manifest).",
+    )
+    p_attach.add_argument(
+        "issue", help="Issue key (e.g. CBRD-12345) or full browse URL."
+    )
+    p_attach.add_argument(
+        "--out", default=None, metavar="DIR",
+        help="Download directory (default: "
+             "~/.local/share/cubrid-jira/attachments/<KEY>/).",
+    )
+    p_attach.add_argument(
+        "--list", action="store_true",
+        help="List attachment metadata only; do not download.",
+    )
+    p_attach.add_argument(
+        "--max-bytes", type=_non_negative_int, default=5 * 1024 * 1024, metavar="N",
+        help="Skip downloading attachments larger than N bytes (default 5242880 "
+             "= 5 MiB); they are still listed in the manifest.",
+    )
+    p_attach.add_argument(
+        "--server", default=DEFAULT_SERVER,
+        help=f"JIRA server base URL for authenticated download (default: {DEFAULT_SERVER}).",
+    )
+    p_attach.add_argument(
+        "--output", choices=("text", "json"), default="text",
+        help="Output format. 'text' prints a per-file table; 'json' prints the "
+             "manifest on one line (for jq/agents).",
+    )
+    p_attach.set_defaults(func=cmd_attachment)
 
     p_create = sub.add_parser("create", help="Create a new issue.")
     p_create.add_argument("--project", required=True, help="Project key, e.g. CBRD.")
