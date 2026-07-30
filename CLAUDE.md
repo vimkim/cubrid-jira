@@ -3,11 +3,14 @@
 ```text
 canonical binary    cubrid-jira <subcommand> [args…]
 read                search (one issue by key, cache-first) | jql (list by query, live)
+                    | attachment (list/download issue attachments, live)
 field-write         create | comment | comment-list | comment-update | comment-delete | link | transition | assign | update
 structural-write    convert-to-issue | convert-to-subtask | reparent
 credentials         env CUBRID_JIRA_USER + CUBRID_JIRA_PASSWORD
                     (no interactive prompt; falls back to ~/.netrc)
+                    reads (incl. attachment) fall back to anonymous access
 cache directory     $CUBRID_JIRA_DIR  ||  ~/.local/share/cubrid-jira/issues/
+attachments dir     --out || $CUBRID_JIRA_DIR/attachments/<KEY> || ~/.local/share/cubrid-jira/attachments/<KEY>
 output (stdout)     markdown or JSON
 output (stderr)     status + errors
 machine-readable    add `--output json` to write subcommands or to `jql`
@@ -49,7 +52,7 @@ Full background, traps, and curl-only smoke test:
 
 ```text
 cli.py        parent argparse + dispatch + payload builders
-http.py       JiraClient (basic-auth, dry-run, retries) + fetch_issue / search_issues (GET, auth when creds resolve, else anon)
+http.py       JiraClient (basic-auth, dry-run, retries) + fetch_issue / search_issues / download_file (GET, auth when creds resolve, else anon; 401 fails fast → exit 2)
 session.py    SessionClient — JSESSIONID cookies + X-Atlassian-Token for wizard POSTs
 wizard.py     pure HTML parsing + form-payload builders for the Convert wizard
 markdown.py   Jira-wiki → markdown rendering; pure

@@ -1,6 +1,8 @@
 """Cache helpers: resolve + invalidate."""
 
-from cubrid_jira.cache import invalidate, resolve_cache_dir
+from pathlib import Path
+
+from cubrid_jira.cache import invalidate, resolve_attachment_dir, resolve_cache_dir
 
 
 def test_resolve_cli_arg_wins(monkeypatch, tmp_path):
@@ -11,6 +13,24 @@ def test_resolve_cli_arg_wins(monkeypatch, tmp_path):
 def test_resolve_env_wins_over_default(monkeypatch, tmp_path):
     monkeypatch.setenv("CUBRID_JIRA_DIR", str(tmp_path / "from-env"))
     assert resolve_cache_dir(None) == tmp_path / "from-env"
+
+
+def test_attachment_dir_cli_arg_wins(monkeypatch, tmp_path):
+    monkeypatch.setenv("CUBRID_JIRA_DIR", str(tmp_path / "from-env"))
+    got = resolve_attachment_dir("CBRD-1", str(tmp_path / "from-cli"))
+    assert got == tmp_path / "from-cli"  # --out is used as-is, no <KEY> suffix
+
+
+def test_attachment_dir_env_wins_over_default(monkeypatch, tmp_path):
+    monkeypatch.setenv("CUBRID_JIRA_DIR", str(tmp_path / "from-env"))
+    got = resolve_attachment_dir("CBRD-1", None)
+    assert got == tmp_path / "from-env" / "attachments" / "CBRD-1"
+
+
+def test_attachment_dir_default(monkeypatch):
+    monkeypatch.delenv("CUBRID_JIRA_DIR", raising=False)
+    got = resolve_attachment_dir("CBRD-1", None)
+    assert got == Path.home() / ".local" / "share" / "cubrid-jira" / "attachments" / "CBRD-1"
 
 
 def test_invalidate_removes_md_and_json(tmp_path):

@@ -103,6 +103,61 @@ def test_jql_authenticated_401_exits_2_without_retry(fake_server):
     assert len(fake_server.requests) == 1
 
 
+def test_fetch_issue_raises_on_401(fake_server):
+    # F1 (docs/required-fixes-2026-07-30.md): fetch_issue used to swallow the
+    # 401 and return {}, which let recursive walks re-send the rejected
+    # credential once per related issue — the CAPTCHA lockout footgun.
+    fake_server.route("GET", "", raise_=make_http_error(401, "auth failed"))
+    with pytest.raises(http.JiraError) as ei:
+        fetch_issue("CUBRIDQA-1425")
+    assert ei.value.code == 401
+    assert len(fake_server.requests) == 1
+
+
+def test_fetch_issue_still_swallows_404(fake_server, capsys):
+    # Non-auth failures keep the old behavior: one missing related issue must
+    # not abort a whole walk, and a 404 carries no lockout risk.
+    fake_server.route("GET", "", raise_=make_http_error(404, "gone"))
+    assert fetch_issue("CBRD-404") == {}
+    assert "[HTTP 404]" in capsys.readouterr().err
+
+
+def test_search_command_401_exits_2_after_single_attempt(fake_server, tmp_path, monkeypatch):
+    # End-to-end: `search` walks recursively, so the 401 must abort the walk
+    # on the FIRST attempt (exit 2), not once per related issue.
+    monkeypatch.setenv("CUBRID_JIRA_DIR", str(tmp_path))
+    fake_server.route("GET", "", raise_=make_http_error(401, "auth failed"))
+    with pytest.raises(SystemExit) as ei:
+        main(["search", "CBRD-1"])
+    assert ei.value.code == 2
+    assert len(fake_server.requests) == 1
+
+
+def test_credential_resolution_is_memoized(monkeypatch):
+    # F10: recursive walks resolve credentials per read GET; the ~/.netrc
+    # parse must happen at most once per process.
+    from cubrid_jira import auth
+
+    monkeypatch.delenv("CUBRID_JIRA_USER", raising=False)
+    monkeypatch.delenv("CUBRID_JIRA_PASSWORD", raising=False)
+    auth.resolve_credentials_optional.cache_clear()
+
+    parses = []
+
+    class _FakeNetrc:
+        def __init__(self):
+            parses.append(1)
+
+        def authenticators(self, host):
+            return ("u", None, "p")
+
+    monkeypatch.setattr(auth.netrc, "netrc", _FakeNetrc)
+    first = auth.resolve_credentials_optional("http://jira.cubrid.org")
+    second = auth.resolve_credentials_optional("http://jira.cubrid.org")
+    assert first == second == ("u", "p")
+    assert len(parses) == 1
+
+
 # --------------------------------------------------------------------------- #
 # Cache-first search is unaffected: a cache-only hit still skips the network.
 # --------------------------------------------------------------------------- #

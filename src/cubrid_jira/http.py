@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 import re
 import sys
 import time
@@ -37,6 +38,15 @@ class JiraError(RuntimeError):
     def __init__(self, *args, code: int | None = None) -> None:
         super().__init__(*args)
         self.code = code
+
+
+def exit_code_for_http(code: int | None) -> int:
+    """Map an HTTP status onto the project exit-code contract.
+
+    0 ok | 1 generic | 2 401 | 3 403 | 4 404 | 5 400. ``None`` (transport
+    error, no HTTP status) and any unlisted status fall through to 1.
+    """
+    return {400: 5, 401: 2, 403: 3, 404: 4}.get(code or 0, 1)
 
 
 def parse_issue_key(arg: str) -> str:
@@ -77,6 +87,15 @@ def fetch_issue(key: str) -> dict:
     *require* credentials — the public CUBRID JIRA serves issue JSON
     anonymously. When a credential resolves (env or ``~/.netrc``) it is sent so
     login-required projects (e.g. ``CUBRIDQA``) are readable too.
+
+    A 401 raises :class:`JiraError` (code=401) instead of being swallowed:
+    recursive callers (``walk.fetch_recursive``) would otherwise re-send the
+    same rejected credential once per related issue — several failed
+    basic-auth attempts from a single command, which is what triggers the
+    Jira Server CAPTCHA account lockout. Failing fast keeps it to one attempt
+    per run and lets the CLI honor the exit-code contract (401 → 2). Other
+    HTTP errors keep the swallow-and-continue behavior — a 404/403 on one
+    related issue must not abort the whole walk, and carries no lockout risk.
     """
     url = f"{REST_API}/{key}?expand=renderedFields"
     req = urllib.request.Request(url, headers=_read_headers())
@@ -84,6 +103,13 @@ def fetch_issue(key: str) -> dict:
         with urllib.request.urlopen(req, timeout=15) as resp:
             return json.loads(resp.read().decode())
     except urllib.error.HTTPError as e:
+        if e.code == 401:
+            raise JiraError(
+                f"Auth failed (HTTP 401) fetching {key}. Do NOT retry — check "
+                "CUBRID_JIRA_USER / CUBRID_JIRA_PASSWORD (or ~/.netrc), and "
+                "reset the CAPTCHA via the web UI if it already triggered.",
+                code=401,
+            ) from e
         print(f"  [HTTP {e.code}] Failed to fetch {key}: {e.reason}", file=sys.stderr)
         return {}
     except Exception as e:
@@ -105,8 +131,8 @@ def search_issues(
     anonymously), but sends them when they resolve so login-required projects
     (e.g. ``CUBRIDQA``) are searchable too.
 
-    Unlike ``fetch_issue`` (which swallows errors and returns ``{}``), this
-    raises :class:`JiraError` on HTTP/network failure so callers can tell a
+    Unlike ``fetch_issue`` (which swallows non-401 errors and returns ``{}``),
+    this raises :class:`JiraError` on HTTP/network failure so callers can tell a
     genuinely empty result set apart from a rejected query (e.g. a malformed
     JQL string yields HTTP 400, not zero hits). The raised error carries the
     HTTP ``code`` so the CLI can honor the exit-code contract; 5xx and
@@ -143,6 +169,69 @@ def search_issues(
                 time.sleep(1.5)
                 continue
             raise JiraError(f"Network error during JQL search: {reason}") from e
+
+
+def _discard_partial(dest: str) -> None:
+    """Remove a partially written download so failures never masquerade as files."""
+    try:
+        os.unlink(dest)
+    except OSError:
+        pass
+
+
+def download_file(url: str, dest: str, max_bytes: int | None = None) -> int:
+    """Streamed GET of an attachment ``content`` URL to ``dest`` (read bucket).
+
+    Like the other read helpers, authenticates when a credential resolves and
+    stays anonymous otherwise, so public-project attachments need no setup.
+    Streams in chunks so a large file never sits fully in memory and returns
+    the number of bytes written.
+
+    ``max_bytes`` is enforced on the bytes actually received — the server-
+    reported metadata ``size`` is untrusted input and may be absent or wrong.
+    On any failure (HTTP, network, byte cap, or filesystem ``OSError``) the
+    partial file is deleted and :class:`JiraError` is raised, carrying the
+    HTTP ``code`` when there is one.
+    """
+    headers: dict[str, str] = {}
+    creds = resolve_credentials_optional(JIRA_BASE)
+    if creds is not None:
+        headers["Authorization"] = basic_auth_header(*creds)
+    req = urllib.request.Request(url, headers=headers)
+    try:
+        written = 0
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            with open(dest, "wb") as fh:
+                while True:
+                    chunk = resp.read(65536)
+                    if not chunk:
+                        break
+                    written += len(chunk)
+                    if max_bytes is not None and written > max_bytes:
+                        raise JiraError(
+                            f"Download of {url} exceeded {max_bytes} bytes "
+                            "mid-stream (server-reported size was smaller or "
+                            "missing); partial file removed."
+                        )
+                    fh.write(chunk)
+        return written
+    except urllib.error.HTTPError as e:
+        _discard_partial(dest)
+        raise JiraError(
+            f"Download failed (HTTP {e.code}) for {url}: {e.reason}",
+            code=e.code,
+        ) from e
+    except urllib.error.URLError as e:
+        _discard_partial(dest)
+        reason = getattr(e, "reason", e)
+        raise JiraError(f"Network error downloading {url}: {reason}") from e
+    except OSError as e:
+        # Must come after HTTPError/URLError — both subclass OSError.
+        _discard_partial(dest)
+        raise JiraError(f"Filesystem error writing {dest}: {e}") from e
+    except JiraError:
+        _discard_partial(dest)
+        raise
 
 
 class JiraClient:
@@ -230,39 +319,6 @@ class JiraClient:
                     time.sleep(1.5)
                     continue
                 raise JiraError(f"Network error talking to {url}: {reason}") from e
-
-    def download(self, url: str, dest: str) -> int:
-        """Authenticated streamed GET of a full attachment URL to ``dest``.
-
-        ``url`` is an absolute attachment ``content`` URL (as returned in an
-        issue's ``attachment`` field), not a REST path. Streams the body to
-        ``dest`` so a large file never sits fully in memory, and returns the
-        number of bytes written. A GET, so it runs even in dry-run mode.
-        Raises :class:`JiraError` (carrying the HTTP ``code``) on failure.
-        """
-        req = urllib.request.Request(
-            url,
-            headers={"Authorization": basic_auth_header(self.user, self.password)},
-        )
-        try:
-            written = 0
-            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
-                with open(dest, "wb") as fh:
-                    while True:
-                        chunk = resp.read(65536)
-                        if not chunk:
-                            break
-                        fh.write(chunk)
-                        written += len(chunk)
-            return written
-        except urllib.error.HTTPError as e:
-            raise JiraError(
-                f"Download failed (HTTP {e.code}) for {url}: {e.reason}",
-                code=e.code,
-            ) from e
-        except urllib.error.URLError as e:
-            reason = getattr(e, "reason", e)
-            raise JiraError(f"Network error downloading {url}: {reason}") from e
 
     # -- internals ------------------------------------------------------- #
 
