@@ -24,7 +24,12 @@ import sys
 from pathlib import Path
 
 from cubrid_jira.auth import resolve_credentials
-from cubrid_jira.cache import invalidate, resolve_cache_dir, resolve_field_map_path
+from cubrid_jira.cache import (
+    invalidate,
+    resolve_attachment_dir,
+    resolve_cache_dir,
+    resolve_field_map_path,
+)
 from cubrid_jira.fields import (
     AmbiguousFieldError,
     FieldSpecError,
@@ -39,6 +44,8 @@ from cubrid_jira.fields import (
 from cubrid_jira.http import (
     JiraClient,
     JiraError,
+    download_file,
+    exit_code_for_http,
     fetch_issue,
     parse_issue_key,
     search_issues,
@@ -82,15 +89,6 @@ def _non_negative_int(value: str) -> int:
     if ivalue < 0:
         raise argparse.ArgumentTypeError(f"must be >= 0, got {value!r}")
     return ivalue
-
-
-def _exit_code_for_http(code: int | None) -> int:
-    """Map an HTTP status onto the project exit-code contract.
-
-    0 ok | 1 generic | 2 401 | 3 403 | 4 404 | 5 400. ``None`` (transport
-    error, no HTTP status) and any unlisted status fall through to 1.
-    """
-    return {400: 5, 401: 2, 403: 3, 404: 4}.get(code or 0, 1)
 
 
 # --------------------------------------------------------------------------- #
@@ -385,7 +383,13 @@ def cmd_search(args) -> None:
     print(f"# Fetching {key} from jira.cubrid.org ...", file=sys.stderr)
     max_depth = 0 if args.no_recurse else 1
     visited: set[str] = set()
-    fetched = fetch_recursive(key, max_depth, visited, out_dir, force=True)
+    try:
+        fetched = fetch_recursive(key, max_depth, visited, out_dir, force=True)
+    except JiraError as e:
+        # 401 aborts the walk on the first attempt (CAPTCHA lockout footgun);
+        # honor the exit-code contract instead of the generic exit 1.
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(exit_code_for_http(e.code))
     if not fetched:
         print(f"Error: Failed to fetch {key}", file=sys.stderr)
         sys.exit(1)
@@ -422,7 +426,7 @@ def cmd_jql(args) -> None:
         )
     except JiraError as e:
         print(f"Error: {e}", file=sys.stderr)
-        sys.exit(_exit_code_for_http(e.code))
+        sys.exit(exit_code_for_http(e.code))
 
     if output == "json":
         print(json.dumps(result, ensure_ascii=False))
@@ -434,8 +438,29 @@ def cmd_jql(args) -> None:
 # attachment (download an issue's attachments)
 # --------------------------------------------------------------------------- #
 
-def _default_attachment_dir(key: str) -> Path:
-    return Path.home() / ".local" / "share" / "cubrid-jira" / "attachments" / key
+def _dest_filename(attachment: dict, taken: set[str]) -> str:
+    """Safe on-disk filename for a server-supplied attachment record.
+
+    The ``filename`` field is untrusted input — anyone who can attach a file
+    to an issue controls it. Two defenses:
+
+    * **Traversal**: only the basename survives, so ``../../x``, absolute
+      paths, and backslash separators cannot escape the download directory.
+      (pathlib alone is not enough: ``out_dir / "/etc/x"`` IS ``/etc/x``.)
+    * **Collisions**: Jira attachments are id-keyed, so duplicate filenames
+      on one issue are legal; the second occurrence gets a ``-<id>`` suffix
+      instead of silently clobbering the first download.
+    """
+    raw = str(attachment.get("filename") or "")
+    name = Path(raw.replace("\\", "/")).name
+    att_id = attachment.get("id") or "unknown"
+    if name in ("", ".", ".."):
+        name = f"attachment-{att_id}"
+    if name in taken:
+        p = Path(name)
+        name = f"{p.stem}-{att_id}{p.suffix}"
+    taken.add(name)
+    return name
 
 
 def _print_attachment_manifest(key, manifest, output, out_dir=None):
@@ -466,7 +491,7 @@ def cmd_attachment(args) -> None:
         result = search_issues(f"key = {key}", fields="attachment", max_results=1)
     except JiraError as e:
         print(f"Error: {e}", file=sys.stderr)
-        sys.exit(_exit_code_for_http(e.code))
+        sys.exit(exit_code_for_http(e.code))
 
     issues = result.get("issues") or []
     atts = ((issues[0].get("fields") or {}).get("attachment") if issues else None) or []
@@ -485,14 +510,14 @@ def cmd_attachment(args) -> None:
         _print_attachment_manifest(key, manifest, output)
         return
 
-    out_dir = Path(args.out) if args.out else _default_attachment_dir(key)
+    out_dir = resolve_attachment_dir(key, args.out)
     if atts:
         out_dir.mkdir(parents=True, exist_ok=True)
-    client = _make_client(args) if atts else None
 
     manifest = []
+    taken: set[str] = set()
     for a in atts:
-        name = a.get("filename") or str(a.get("id"))
+        name = _dest_filename(a, taken)
         size = a.get("size") or 0
         entry = {
             "filename": name,
@@ -502,14 +527,21 @@ def cmd_attachment(args) -> None:
             "downloaded": False,
         }
         if size > args.max_bytes:
+            # Cheap pre-skip from the (untrusted) metadata size; the
+            # authoritative cap is enforced on the stream in download_file.
             entry["skipped"] = f"oversize (> {args.max_bytes} bytes)"
         else:
             dest = out_dir / name
             try:
-                client.download(a.get("content"), str(dest))
+                download_file(a.get("content"), str(dest), max_bytes=args.max_bytes)
                 entry["downloaded"] = True
                 entry["path"] = str(dest)
             except JiraError as e:
+                if e.code == 401:
+                    # Abort the whole command: retrying per attachment would
+                    # re-send the rejected credential (CAPTCHA lockout).
+                    print(f"Error: {e}", file=sys.stderr)
+                    sys.exit(2)
                 entry["skipped"] = f"download failed: {e}"
         manifest.append(entry)
 
@@ -572,7 +604,14 @@ def cmd_create(args) -> None:
     if new_key:
         cache_dir = resolve_cache_dir(args.dir)
         cache_dir.mkdir(parents=True, exist_ok=True)
-        full = fetch_issue(new_key)
+        try:
+            full = fetch_issue(new_key)
+        except JiraError as e:
+            # The write above already succeeded; a failed cache refresh must
+            # not turn the command into a failure. Report and move on.
+            print(f"Warning: created {new_key} but cache refresh failed: {e}",
+                  file=sys.stderr)
+            full = {}
         if full:
             save_issue(full, cache_dir)
         url = f"{args.server.rstrip('/')}/browse/{new_key}"
@@ -977,10 +1016,15 @@ def _drive_task_to_subtask(
 def _fetch_meta(key: str) -> tuple[str, str, str | None]:
     """Return ``(issue_id, issuetype_name, parent_key_or_None)`` for ``key``.
 
-    On a fetch failure the helper exits 4 — ``fetch_issue`` already printed
+    A 401 exits 2 per the exit-code contract (never "not found"). On any
+    other fetch failure the helper exits 4 — ``fetch_issue`` already printed
     the underlying HTTP/network reason to stderr.
     """
-    data = fetch_issue(key)
+    try:
+        data = fetch_issue(key)
+    except JiraError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(exit_code_for_http(e.code))
     if not data:
         sys.exit(4)
     issue_id = str(data.get("id", ""))
@@ -1443,8 +1487,8 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p_attach.add_argument(
         "--out", default=None, metavar="DIR",
-        help="Download directory (default: "
-             "~/.local/share/cubrid-jira/attachments/<KEY>/).",
+        help="Download directory (default: $CUBRID_JIRA_DIR/attachments/<KEY>/ "
+             "or ~/.local/share/cubrid-jira/attachments/<KEY>/).",
     )
     p_attach.add_argument(
         "--list", action="store_true",
@@ -1452,13 +1496,14 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p_attach.add_argument(
         "--max-bytes", type=_non_negative_int, default=5 * 1024 * 1024, metavar="N",
-        help="Skip downloading attachments larger than N bytes (default 5242880 "
-             "= 5 MiB); they are still listed in the manifest.",
+        help="Abort downloads that exceed N bytes on the wire (default 5242880 "
+             "= 5 MiB); oversize attachments are still listed in the manifest. "
+             "Enforced on received bytes, not the server-reported size.",
     )
-    p_attach.add_argument(
-        "--server", default=DEFAULT_SERVER,
-        help=f"JIRA server base URL for authenticated download (default: {DEFAULT_SERVER}).",
-    )
+    # No --server flag: the metadata read (search_issues) and credential
+    # resolution are hard-wired to JIRA_BASE, so honoring a custom server for
+    # the download half only would silently return wrong answers. Re-add once
+    # the whole read path takes a base URL.
     p_attach.add_argument(
         "--output", choices=("text", "json"), default="text",
         help="Output format. 'text' prints a per-file table; 'json' prints the "

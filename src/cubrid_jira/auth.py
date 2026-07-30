@@ -1,4 +1,4 @@
-"""Credential resolution for CUBRID JIRA writes.
+"""Credential resolution for CUBRID JIRA reads and writes.
 
 Resolution order (first hit wins):
     1. CUBRID_JIRA_USER + CUBRID_JIRA_PASSWORD env vars
@@ -8,6 +8,7 @@ Resolution order (first hit wins):
 
 from __future__ import annotations
 
+import functools
 import netrc
 import os
 import sys
@@ -19,6 +20,7 @@ def _host_of(server: str) -> str:
     return host or "jira.cubrid.org"
 
 
+@functools.lru_cache(maxsize=None)
 def resolve_credentials_optional(
     server: str = "http://jira.cubrid.org",
 ) -> tuple[str, str] | None:
@@ -28,6 +30,10 @@ def resolve_credentials_optional(
     returns ``None`` instead of exiting when nothing is found. The read path
     uses this so it can authenticate when a credential is available and fall
     back to an anonymous GET (public projects) when it is not.
+
+    Memoized per process: every read GET resolves credentials, and a
+    recursive walk would otherwise re-parse ``~/.netrc`` once per issue for a
+    value that cannot change mid-run. Tests reset via ``cache_clear()``.
     """
     user = os.environ.get("CUBRID_JIRA_USER")
     pw = os.environ.get("CUBRID_JIRA_PASSWORD")

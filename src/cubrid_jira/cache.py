@@ -23,6 +23,24 @@ def resolve_cache_dir(cli_dir: str | None = None) -> Path:
     return DEFAULT_DIR
 
 
+def resolve_attachment_dir(key: str, cli_dir: str | None = None) -> Path:
+    """Where attachments for ``key`` are downloaded.
+
+    Same resolution convention as :func:`resolve_cache_dir` so
+    ``$CUBRID_JIRA_DIR`` redirects *all* on-disk state, not just the issue
+    cache:
+        1. explicit --out (used as-is, no <KEY> suffix)
+        2. $CUBRID_JIRA_DIR/attachments/<KEY>
+        3. ~/.local/share/cubrid-jira/attachments/<KEY>
+    """
+    if cli_dir:
+        return Path(cli_dir)
+    env = os.environ.get("CUBRID_JIRA_DIR")
+    if env:
+        return Path(env) / "attachments" / key
+    return DEFAULT_DIR.parent / "attachments" / key
+
+
 def resolve_field_map_path(cli_dir: str | None = None) -> Path:
     """Where the customfield name -> id map lives on disk.
 

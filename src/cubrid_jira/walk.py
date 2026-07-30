@@ -11,7 +11,7 @@ import json
 import sys
 from pathlib import Path
 
-from cubrid_jira.http import fetch_issue, parse_issue_key
+from cubrid_jira.http import JiraError, exit_code_for_http, fetch_issue, parse_issue_key
 from cubrid_jira.markdown import extract_related_keys, format_issue_markdown
 
 
@@ -134,10 +134,17 @@ def bulk_fetch_main() -> None:
 
     max_depth = 0 if args.no_recurse else args.depth
     visited: set[str] = set()
-    fetch_recursive(
-        key, max_depth, visited, out_dir,
-        raw_json=args.raw_json, force=args.force or not args.skip_existing,
-    )
+    try:
+        fetch_recursive(
+            key, max_depth, visited, out_dir,
+            raw_json=args.raw_json, force=args.force or not args.skip_existing,
+        )
+    except JiraError as e:
+        # A 401 propagates out of fetch_issue so the walk stops after ONE
+        # failed basic-auth attempt — continuing would re-send the rejected
+        # credential per related issue and trip the CAPTCHA account lockout.
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(exit_code_for_http(e.code))
     print(
         f"\nDone. {len(visited)} issue(s) in {out_dir}/: {', '.join(sorted(visited))}"
     )

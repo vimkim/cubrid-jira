@@ -10,13 +10,22 @@ from dataclasses import dataclass, field
 
 import pytest
 
+from cubrid_jira.auth import resolve_credentials_optional
+
 
 @pytest.fixture(autouse=True)
 def _stub_credentials(monkeypatch):
-    """Make sure auth.resolve_credentials() never touches the user's real netrc."""
+    """Make sure auth.resolve_credentials() never touches the user's real netrc.
+
+    resolve_credentials_optional is memoized per process (one netrc parse per
+    run), so the cache must be reset around every test or the first test's
+    credentials would leak into the rest of the suite.
+    """
+    resolve_credentials_optional.cache_clear()
     monkeypatch.setenv("CUBRID_JIRA_USER", "testuser")
     monkeypatch.setenv("CUBRID_JIRA_PASSWORD", "testpw")
     yield
+    resolve_credentials_optional.cache_clear()
 
 
 @pytest.fixture(autouse=True)
@@ -30,9 +39,18 @@ def _fast_retries(monkeypatch):
 class _FakeResponse:
     def __init__(self, body: bytes):
         self._body = body
+        self._pos = 0
 
-    def read(self) -> bytes:
-        return self._body
+    def read(self, size: int = -1) -> bytes:
+        # Supports chunked reads (read(65536)) for download streaming as well
+        # as the read-everything calls the JSON helpers use.
+        if size is None or size < 0:
+            chunk = self._body[self._pos:]
+            self._pos = len(self._body)
+        else:
+            chunk = self._body[self._pos:self._pos + size]
+            self._pos += len(chunk)
+        return chunk
 
     def __enter__(self):
         return self
