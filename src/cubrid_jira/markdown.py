@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import re
 import subprocess
+import sys
 
 from cubrid_jira.http import JIRA_BASE  # constant-only import — no cycles
 from cubrid_jira.spacing import normalize_korean_jira_spacing
@@ -36,8 +37,32 @@ class MarkdownConversionError(RuntimeError):
     """Markdown could not be converted to Jira wiki markup."""
 
 
+_pandoc_read_warned = False
+
+
+def _warn_pandoc_read_once(detail: str) -> None:
+    """Explain the raw-markup fallback on stderr, at most once per process."""
+    global _pandoc_read_warned
+    if _pandoc_read_warned:
+        return
+    _pandoc_read_warned = True
+    suffix = f" ({detail})" if detail else ""
+    print(
+        f"Warning: pandoc cannot convert Jira wiki markup{suffix}; showing it raw. "
+        "The jira reader needs pandoc >= 2.9.1 — the RHEL 8 package is 2.0.6.",
+        file=sys.stderr,
+    )
+
+
 def jira_to_markdown(text: str) -> str:
-    """Convert Jira wiki markup to markdown via pandoc. Plain-text fallback."""
+    """Convert Jira wiki markup to markdown via pandoc. Raw-markup fallback.
+
+    Falls back to the input whenever pandoc cannot do the conversion: no binary,
+    a timeout, or a pandoc built without the ``jira`` reader. That last case exits
+    non-zero with empty stdout, so returning stdout unconditionally would render
+    every issue as though it had no description — a silent, plausible-looking
+    wrong answer rather than a visible failure.
+    """
     try:
         result = subprocess.run(
             ["pandoc", "-f", "jira", "-t", "markdown", "--wrap=none"],
@@ -46,9 +71,15 @@ def jira_to_markdown(text: str) -> str:
             text=True,
             timeout=10,
         )
-        return result.stdout.strip()
     except Exception:
         return text
+
+    if result.returncode != 0:
+        stderr = (result.stderr or "").strip()
+        _warn_pandoc_read_once(stderr.splitlines()[0] if stderr else "")
+        return text
+
+    return result.stdout.strip()
 
 
 def _is_korean_char(ch: str) -> bool:
