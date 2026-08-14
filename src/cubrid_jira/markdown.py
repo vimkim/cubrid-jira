@@ -31,6 +31,36 @@ MARKDOWN_INLINE_RE = re.compile(
 )
 MARKDOWN_FENCE_RE = re.compile(r"^\s*(```|~~~)")
 JIRA_VERBATIM_RE = re.compile(r"^\s*\{(?:code|noformat)(?::[^}]*)?\}\s*$")
+JIRA_CODE_LANGUAGE_RE = re.compile(
+    r"^(?P<indent>\s*)\{code:(?P<language>[^}|]+)"
+    r"(?P<options>\|[^}]*)?\}(?P<trailing>\s*)$"
+)
+
+# Source-code formatter names exposed by jira.cubrid.org. Pandoc copies any
+# Markdown fence label into {code:<label>}, but Jira renders a visible error
+# when that label is not in this vocabulary.
+JIRA_CODE_LANGUAGES = frozenset(
+    {
+        "actionscript", "ada", "applescript", "bash", "c", "c#", "c++",
+        "cpp", "css", "erlang", "go", "groovy", "haskell", "html", "java",
+        "javascript", "js", "json", "lua", "none", "nyan", "objc", "perl",
+        "php", "python", "r", "rainbow", "ruby", "scala", "sh", "sql",
+        "swift", "visualbasic", "xml", "yaml",
+    }
+)
+JIRA_CODE_LANGUAGE_ALIASES = {
+    "cc": "cpp",
+    "console": "none",
+    "csharp": "c#",
+    "cxx": "cpp",
+    "objective-c": "objc",
+    "plaintext": "none",
+    "shell": "sh",
+    "shell-session": "none",
+    "text": "none",
+    "txt": "none",
+    "yml": "yaml",
+}
 
 
 class MarkdownConversionError(RuntimeError):
@@ -224,6 +254,37 @@ def fix_jira_bold_code_nesting(text: str) -> str:
     return _fix_jira_lines_outside_verbatim_blocks(text, _fix_line)
 
 
+def normalize_jira_code_languages(text: str) -> str:
+    """Prevent unsupported Jira source-code formatter labels.
+
+    Known aliases are canonicalized. Any other label outside this Jira
+    instance's supported vocabulary becomes ``none``, preserving the verbatim
+    block without exposing a renderer error in the published issue.
+    """
+    result: list[str] = []
+
+    for line in text.splitlines(keepends=True):
+        content = line.rstrip("\r\n")
+        newline = line[len(content):]
+        match = JIRA_CODE_LANGUAGE_RE.match(content)
+        if not match:
+            result.append(line)
+            continue
+
+        language = match.group("language").strip().lower()
+        language = JIRA_CODE_LANGUAGE_ALIASES.get(language, language)
+        if language not in JIRA_CODE_LANGUAGES:
+            language = "none"
+
+        options = match.group("options") or ""
+        result.append(
+            f'{match.group("indent")}{{code:{language}{options}}}'
+            f'{match.group("trailing")}{newline}'
+        )
+
+    return "".join(result)
+
+
 def md_to_jira(md_text: str) -> str:
     """Convert Markdown to Jira wiki markup via pandoc."""
     try:
@@ -252,6 +313,7 @@ def markdown_to_jira_body(md_text: str) -> str:
     """Render local Markdown as Jira wiki markup suitable for writes."""
     spaced_markdown = normalize_korean_markdown_spacing(md_text)
     jira_text = md_to_jira(sanitize_markdown(spaced_markdown))
+    jira_text = normalize_jira_code_languages(jira_text)
     jira_text = fix_jira_bold_code_nesting(jira_text)
     return normalize_korean_jira_spacing(jira_text)
 

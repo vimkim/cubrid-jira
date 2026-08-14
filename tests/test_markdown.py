@@ -40,6 +40,33 @@ def test_markdown_to_jira_body_sanitizes_and_postprocesses(monkeypatch):
     assert "*foo* {{bar}} *baz*" in body
 
 
+@pytest.mark.parametrize(
+    ("pandoc_language", "jira_language"),
+    [
+        ("text", "none"),
+        ("plaintext", "none"),
+        ("mermaid", "none"),
+        ("shell", "sh"),
+        ("sql", "sql"),
+    ],
+)
+def test_markdown_to_jira_body_normalizes_code_formatter_languages(
+    monkeypatch, pandoc_language, jira_language
+):
+    def fake_run(*_args, **_kwargs):
+        return SimpleNamespace(
+            stdout=f"{{code:{pandoc_language}}}\nbody\n{{code}}\n"
+        )
+
+    monkeypatch.setattr(markdown.subprocess, "run", fake_run)
+
+    body = markdown.markdown_to_jira_body("```text\nbody\n```\n")
+
+    assert f"{{code:{jira_language}}}" in body
+    if pandoc_language != jira_language:
+        assert f"{{code:{pandoc_language}}}" not in body
+
+
 def test_markdown_to_jira_body_raises_when_pandoc_is_missing(monkeypatch):
     def fail(*_args, **_kwargs):
         raise FileNotFoundError

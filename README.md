@@ -196,6 +196,8 @@ cubrid-jira update     CBRD-A [--summary "..."] [--description-file path] \
 
 For `--body-file` and `--description-file`, write commands treat input as Markdown by default and convert it to Jira wiki markup before sending. Use `--from jira` when the file already contains raw Jira wiki markup. Both paths apply Korean/Jira inline spacing fixes where needed because Jira Server can fail to parse markers like `{{name}}의`.
 
+Markdown fence labels are normalized to jira.cubrid.org's formatter names during conversion. Common aliases such as `text` and `plaintext` become `none`, and any unknown label also falls back to `none`, preventing published descriptions from displaying an unsupported source-code formatter error.
+
 ### `--field FIELD=VALUE` — arbitrary custom fields
 
 Repeat `--field` to set any JIRA custom field (the canonical use case is project-required fields like CUBRID's `QA Scenario`, which gates every `create` against `CBRD`).
