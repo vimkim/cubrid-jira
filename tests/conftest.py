@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import io
 import json
+import shutil
+import subprocess
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
@@ -11,6 +13,28 @@ from dataclasses import dataclass, field
 import pytest
 
 from cubrid_jira.auth import resolve_credentials_optional
+
+
+def _pandoc_has_jira_reader_and_writer() -> bool:
+    if shutil.which("pandoc") is None:
+        return False
+    try:
+        for flag in ("--list-input-formats", "--list-output-formats"):
+            result = subprocess.run(
+                ["pandoc", flag],
+                capture_output=True,
+                text=True,
+                check=True,
+                timeout=5,
+            )
+            if "jira" not in result.stdout.splitlines():
+                return False
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return True
+
+
+PANDOC_HAS_JIRA = _pandoc_has_jira_reader_and_writer()
 
 
 @pytest.fixture(autouse=True)

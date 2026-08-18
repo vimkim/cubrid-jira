@@ -198,6 +198,12 @@ For `--body-file` and `--description-file`, write commands treat input as Markdo
 
 Markdown fence labels are normalized to jira.cubrid.org's formatter names during conversion. Common aliases such as `text` and `plaintext` become `none`, and any unknown label also falls back to `none`, preventing published descriptions from displaying an unsupported source-code formatter error.
 
+Jira tables returned by `search` are always written as Markdown pipe tables so
+their column boundaries remain stable when cells are edited. Markdown body
+writes reject Pandoc simple tables with an actionable line-numbered error;
+convert them to pipe tables before retrying. Escaped pipes inside pipe-table
+cells and the bytes inside fenced code blocks are preserved by the Jira writer.
+
 ### `--field FIELD=VALUE` — arbitrary custom fields
 
 Repeat `--field` to set any JIRA custom field (the canonical use case is project-required fields like CUBRID's `QA Scenario`, which gates every `create` against `CBRD`).

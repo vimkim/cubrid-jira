@@ -36,3 +36,15 @@ reparent, …). Credentials are required and every send is gated behind
 `--yes`; without it the command is a dry-run no-op. What the gate protects is
 the server, not the local machine.
 _Avoid_: mutating commands, dangerous commands
+
+**Round-trip-safe body**:
+A Markdown issue body that can pass through the Jira→Markdown read conversion
+and the Markdown→Jira write conversion without losing table cell boundaries,
+cell content, or verbatim code-block content.
+_Avoid_: safe Markdown (does not name which boundary is safe)
+
+**Simple table**:
+A Markdown table whose columns are inferred from whitespace and a dashed ruler.
+Write commands reject this form because editing a cell past its ruler can
+silently change the table.
+_Avoid_: aligned table, whitespace table

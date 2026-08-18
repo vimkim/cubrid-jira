@@ -30,6 +30,13 @@ MARKDOWN_INLINE_RE = re.compile(
     re.VERBOSE,
 )
 MARKDOWN_FENCE_RE = re.compile(r"^\s*(```|~~~)")
+MARKDOWN_FENCE_OPEN_RE = re.compile(
+    r"^[ \t]*(?P<marker>`{3,}|~{3,})[^\r\n]*(?:\r?\n)?$"
+)
+SIMPLE_TABLE_SEPARATOR_RE = re.compile(
+    r"^[ \t]*-{2,}(?:[ \t]+-{2,})+[ \t]*$"
+)
+SIMPLE_TABLE_HEADER_RE = re.compile(r"\S[ \t]{2,}\S")
 JIRA_VERBATIM_RE = re.compile(r"^\s*\{(?:code|noformat)(?::[^}]*)?\}\s*$")
 JIRA_CODE_LANGUAGE_RE = re.compile(
     r"^(?P<indent>\s*)\{code:(?P<language>[^}|]+)"
@@ -61,6 +68,9 @@ JIRA_CODE_LANGUAGE_ALIASES = {
     "txt": "none",
     "yml": "yaml",
 }
+PANDOC_ROUND_TRIP_MARKDOWN_FORMAT = (
+    "markdown-simple_tables-multiline_tables-grid_tables+pipe_tables"
+)
 
 
 class MarkdownConversionError(RuntimeError):
@@ -95,7 +105,11 @@ def jira_to_markdown(text: str) -> str:
     """
     try:
         result = subprocess.run(
-            ["pandoc", "-f", "jira", "-t", "markdown", "--wrap=none"],
+            [
+                "pandoc", "-f", "jira",
+                "-t", PANDOC_ROUND_TRIP_MARKDOWN_FORMAT,
+                "--wrap=none",
+            ],
             input=text,
             capture_output=True,
             text=True,
@@ -188,7 +202,22 @@ def sanitize_markdown(text: str) -> str:
     """Ensure blank lines before headings, lists, and fenced code blocks."""
     lines = text.split("\n")
     out: list[str] = []
+    fence_marker = ""
     for i, line in enumerate(lines):
+        fence_match = MARKDOWN_FENCE_RE.match(line)
+        if fence_match:
+            marker = fence_match.group(1)
+            if fence_marker == marker:
+                fence_marker = ""
+                out.append(line)
+                continue
+            if not fence_marker:
+                fence_marker = marker
+
+        if fence_marker and not fence_match:
+            out.append(line)
+            continue
+
         if i > 0 and out and out[-1].strip() != "":
             needs_blank = False
             if re.match(r"^#{1,6}\s", line):
@@ -197,12 +226,145 @@ def sanitize_markdown(text: str) -> str:
                 needs_blank = not re.match(r"^[-*+]\s", out[-1])
             elif re.match(r"^\d+\.\s", line):
                 needs_blank = not re.match(r"^\d+\.\s", out[-1])
-            elif re.match(r"^[~`]{3}", line):
+            elif fence_match:
                 needs_blank = True
             if needs_blank:
                 out.append("")
         out.append(line)
     return "\n".join(out)
+
+
+def _find_simple_table_separator(text: str) -> int | None:
+    """Return the 1-based line of an unsafe simple-table ruler, if any."""
+    lines = text.splitlines()
+    previous_line = ""
+    line_index = 0
+
+    while line_index < len(lines):
+        line = lines[line_index]
+        opener = MARKDOWN_FENCE_OPEN_RE.match(line)
+        if opener:
+            marker = opener.group("marker")
+            closing_re = re.compile(
+                rf"^[ \t]*{re.escape(marker[0])}{{{len(marker)},}}[ \t]*$"
+            )
+            line_index += 1
+            while line_index < len(lines):
+                if closing_re.match(lines[line_index]):
+                    line_index += 1
+                    break
+                line_index += 1
+            previous_line = ""
+            continue
+
+        if (
+            SIMPLE_TABLE_SEPARATOR_RE.match(line)
+            and SIMPLE_TABLE_HEADER_RE.search(previous_line)
+        ):
+            return line_index + 1
+
+        previous_line = line
+        line_index += 1
+
+    return None
+
+
+def _protect_escaped_pipes(text: str) -> tuple[str, str]:
+    """Hide Markdown-escaped pipes from Pandoc's Jira table writer."""
+    token = "CUBRIDJIRAESCAPEDPIPE"
+    while token in text:
+        token += "X"
+
+    result: list[str] = []
+    fence_marker = ""
+
+    for line in text.splitlines(keepends=True):
+        fence_match = MARKDOWN_FENCE_RE.match(line)
+        if fence_match:
+            marker = fence_match.group(1)
+            if not fence_marker:
+                fence_marker = marker
+            elif marker == fence_marker:
+                fence_marker = ""
+            result.append(line)
+            continue
+
+        if fence_marker:
+            result.append(line)
+            continue
+
+        protected_line: list[str] = []
+        for char in line:
+            if char == "|":
+                preceding_backslashes = 0
+                for previous in reversed(protected_line):
+                    if previous != "\\":
+                        break
+                    preceding_backslashes += 1
+                if preceding_backslashes % 2:
+                    protected_line.pop()
+                    protected_line.append(token)
+                    continue
+            protected_line.append(char)
+        result.extend(protected_line)
+
+    return "".join(result), token
+
+
+def _protect_fenced_code_contents(text: str) -> tuple[str, list[tuple[str, str]]]:
+    """Replace closed fenced-code payloads with tokens Pandoc cannot alter."""
+    lines = text.splitlines(keepends=True)
+    result: list[str] = []
+    replacements: list[tuple[str, str]] = []
+    line_index = 0
+
+    while line_index < len(lines):
+        opener = MARKDOWN_FENCE_OPEN_RE.match(lines[line_index])
+        if not opener:
+            result.append(lines[line_index])
+            line_index += 1
+            continue
+
+        marker = opener.group("marker")
+        closing_re = re.compile(
+            rf"^[ \t]*{re.escape(marker[0])}{{{len(marker)},}}[ \t]*(?:\r?\n)?$"
+        )
+        closing_index = line_index + 1
+        while closing_index < len(lines):
+            if closing_re.match(lines[closing_index]):
+                break
+            closing_index += 1
+
+        if closing_index == len(lines):
+            result.extend(lines[line_index:])
+            break
+
+        token = f"CUBRIDJIRACODEBLOCK{len(replacements)}"
+        while token in text:
+            token += "X"
+        opener_newline = "\r\n" if lines[line_index].endswith("\r\n") else "\n"
+        content = "".join(lines[line_index + 1:closing_index])
+
+        result.append(lines[line_index])
+        result.append(token + opener_newline)
+        result.append(lines[closing_index])
+        replacements.append((token, content))
+        line_index = closing_index + 1
+
+    return "".join(result), replacements
+
+
+def _restore_fenced_code_contents(
+    jira_text: str, replacements: list[tuple[str, str]]
+) -> str:
+    for token, content in replacements:
+        placeholder_line = token + "\n"
+        if placeholder_line not in jira_text:
+            raise MarkdownConversionError(
+                "pandoc did not preserve a fenced code block placeholder"
+            )
+        jira_text = jira_text.replace(placeholder_line, content, 1)
+    return jira_text
 
 
 def _fix_jira_lines_outside_verbatim_blocks(text: str, fix_line) -> str:
@@ -311,11 +473,24 @@ def md_to_jira(md_text: str) -> str:
 
 def markdown_to_jira_body(md_text: str) -> str:
     """Render local Markdown as Jira wiki markup suitable for writes."""
-    spaced_markdown = normalize_korean_markdown_spacing(md_text)
+    simple_table_line = _find_simple_table_separator(md_text)
+    if simple_table_line is not None:
+        raise MarkdownConversionError(
+            "unsafe Pandoc simple table at line "
+            f"{simple_table_line}; convert it to a pipe table before uploading"
+        )
+
+    protected_markdown, code_replacements = _protect_fenced_code_contents(md_text)
+    protected_markdown, escaped_pipe_token = _protect_escaped_pipes(
+        protected_markdown
+    )
+    spaced_markdown = normalize_korean_markdown_spacing(protected_markdown)
     jira_text = md_to_jira(sanitize_markdown(spaced_markdown))
+    jira_text = jira_text.replace(escaped_pipe_token, "&#124;")
     jira_text = normalize_jira_code_languages(jira_text)
     jira_text = fix_jira_bold_code_nesting(jira_text)
-    return normalize_korean_jira_spacing(jira_text)
+    jira_text = normalize_korean_jira_spacing(jira_text)
+    return _restore_fenced_code_contents(jira_text, code_replacements)
 
 
 def extract_related_keys(data: dict) -> list[tuple[str, str]]:

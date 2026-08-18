@@ -6,7 +6,7 @@ import sys
 
 import pytest
 
-from conftest import make_http_error
+from conftest import PANDOC_HAS_JIRA, make_http_error
 from cubrid_jira.cli import main
 from cubrid_jira.walk import bulk_fetch_main
 
@@ -44,6 +44,34 @@ def test_search_fetches_live_and_overwrites_stale_cache(
     assert "stale marker" not in out.out
     assert "fresh summary" in (tmp_path / "CBRD-1.md").read_text(encoding="utf-8")
     assert len(fake_server.requests) == 1
+
+
+@pytest.mark.skipif(not PANDOC_HAS_JIRA, reason="pandoc lacks Jira formats")
+def test_search_writes_jira_tables_as_round_trip_safe_pipe_tables(
+    fake_server, tmp_path, monkeypatch, capsys
+):
+    monkeypatch.setenv("CUBRID_JIRA_DIR", str(tmp_path))
+    issue = _issue("CBRD-1", "table body")
+    issue["fields"]["description"] = (
+        "||ID||내용||분류||\n"
+        "|N1|{{has_dealloc_prevent_flag}} :10772 한글|High|\n"
+    )
+    fake_server.route(
+        "GET",
+        "/rest/api/2/issue/CBRD-1?expand=renderedFields",
+        response=issue,
+    )
+
+    main(["search", "CBRD-1", "--no-recurse"])
+
+    output = capsys.readouterr().out
+    cached = (tmp_path / "CBRD-1.md").read_text(encoding="utf-8")
+    for body in (output, cached):
+        assert "| ID" in body
+        assert "| N1" in body
+        assert "has_dealloc_prevent_flag" in body
+        assert ":10772" in body
+        assert "  ----" not in body
 
 
 def test_search_force_is_accepted_as_live_fetch_compatibility_flag(

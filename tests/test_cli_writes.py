@@ -12,6 +12,8 @@ import json
 
 import pytest
 
+import cubrid_jira.markdown as markdown
+from conftest import PANDOC_HAS_JIRA
 from cubrid_jira.cli import main
 from cubrid_jira.markdown import MarkdownConversionError
 
@@ -211,6 +213,78 @@ def test_comment_markdown_conversion_error_exits_before_send(
     assert exc.value.code == 1
     assert "pandoc is not installed" in capsys.readouterr().err
     assert fake_server.requests == []
+
+
+@pytest.mark.parametrize(
+    "command",
+    ("create", "comment", "comment-update", "update"),
+)
+def test_all_markdown_body_writes_reject_simple_tables_before_send(
+    command, fake_server, tmp_path, monkeypatch, capsys
+):
+    body_file = tmp_path / "unsafe.md"
+    body_file.write_text(
+        "  ID   Content\n"
+        "  ---- -------\n"
+        "  N1   a cell that grew beyond its ruler\n",
+        encoding="utf-8",
+    )
+    commands = {
+        "create": [
+            "create", "--project", "CBRD", "--type", "Bug",
+            "--summary", "unsafe body", "--description-file", str(body_file),
+            "--yes",
+        ],
+        "comment": [
+            "comment", "CBRD-5", "--body-file", str(body_file), "--yes",
+        ],
+        "comment-update": [
+            "comment-update", "CBRD-5", "--id", "1001",
+            "--body-file", str(body_file), "--yes",
+        ],
+        "update": [
+            "update", "CBRD-5", "--description-file", str(body_file),
+            "--yes",
+        ],
+    }
+    monkeypatch.setattr(
+        "cubrid_jira.cli.markdown_to_jira_body",
+        markdown.markdown_to_jira_body,
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        main(commands[command])
+
+    assert exc.value.code == 1
+    assert "unsafe Pandoc simple table at line 2" in capsys.readouterr().err
+    assert fake_server.requests == []
+
+
+@pytest.mark.skipif(not PANDOC_HAS_JIRA, reason="pandoc lacks Jira formats")
+def test_update_preserves_code_block_crlf_bytes_from_body_file(
+    fake_server, tmp_path, monkeypatch
+):
+    body_file = tmp_path / "patch.md"
+    body_file.write_bytes(
+        b"```cpp\r\n\tcontext\r\n+ added\r\n```\r\n"
+    )
+    fake_server.route("PUT", "/rest/api/2/issue/CBRD-5", response=None)
+    monkeypatch.setattr(
+        "cubrid_jira.cli.markdown_to_jira_body",
+        markdown.markdown_to_jira_body,
+    )
+
+    main([
+        "update", "CBRD-5", "--description-file", str(body_file), "--yes",
+    ])
+
+    payload = json.loads(fake_server.requests[0].body.decode("utf-8"))
+    assert payload["fields"]["description"] == (
+        "{code:cpp}\n"
+        "\tcontext\r\n"
+        "+ added\r\n"
+        "{code}\n"
+    )
 
 
 def test_comment_spaces_jira_markup_next_to_korean(fake_server, tmp_path, monkeypatch):

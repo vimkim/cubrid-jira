@@ -255,7 +255,7 @@ def _read_and_render_jira_body(
     if allow_stdin and body_file == "-":
         text = sys.stdin.read()
     else:
-        text = Path(body_file).read_text(encoding="utf-8")
+        text = Path(body_file).read_text(encoding="utf-8", newline="")
 
     try:
         return _render_jira_body(text, input_format)
