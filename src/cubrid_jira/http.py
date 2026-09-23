@@ -21,8 +21,9 @@ import urllib.request
 from typing import Any
 
 from cubrid_jira.auth import mask_password, resolve_credentials_optional
+from cubrid_jira.server import DEFAULT_SERVER, normalize_server
 
-JIRA_BASE = "http://jira.cubrid.org"
+JIRA_BASE = DEFAULT_SERVER
 REST_API = f"{JIRA_BASE}/rest/api/2/issue"
 SEARCH_API = f"{JIRA_BASE}/rest/api/2/search"
 
@@ -62,7 +63,7 @@ def basic_auth_header(user: str, password: str) -> str:
     return "Basic " + base64.b64encode(raw).decode("ascii")
 
 
-def _read_headers() -> dict[str, str]:
+def _read_headers(server: str = DEFAULT_SERVER) -> dict[str, str]:
     """Headers for a read GET, authenticated when a credential is available.
 
     Approach (A) from ``docs/authenticated-reads-for-nonpublic-projects.md``:
@@ -73,14 +74,14 @@ def _read_headers() -> dict[str, str]:
     lockout risk — and an anonymous ``401`` carries no credentials to lock.
     """
     headers = {"Accept": "application/json"}
-    creds = resolve_credentials_optional(JIRA_BASE)
+    creds = resolve_credentials_optional(server)
     if creds is not None:
         user, pw = creds
         headers["Authorization"] = basic_auth_header(user, pw)
     return headers
 
 
-def fetch_issue(key: str) -> dict:
+def fetch_issue(key: str, *, server: str = DEFAULT_SERVER) -> dict:
     """GET an issue's full JSON, authenticating when a credential is available.
 
     Kept separate from :class:`JiraClient` because the read flow does not
@@ -97,8 +98,9 @@ def fetch_issue(key: str) -> dict:
     HTTP errors keep the swallow-and-continue behavior — a 404/403 on one
     related issue must not abort the whole walk, and carries no lockout risk.
     """
-    url = f"{REST_API}/{key}?expand=renderedFields"
-    req = urllib.request.Request(url, headers=_read_headers())
+    base = normalize_server(server)
+    url = f"{base}/rest/api/2/issue/{key}?expand=renderedFields"
+    req = urllib.request.Request(url, headers=_read_headers(base))
     try:
         with urllib.request.urlopen(req, timeout=15) as resp:
             return json.loads(resp.read().decode())
@@ -122,6 +124,8 @@ def search_issues(
     fields: str = "summary,status,issuetype,assignee,updated",
     max_results: int = 50,
     start_at: int = 0,
+    *,
+    server: str = DEFAULT_SERVER,
 ) -> dict:
     """JQL search via ``/rest/api/2/search``, authenticated when possible.
 
@@ -146,8 +150,9 @@ def search_issues(
             "startAt": start_at,
         }
     )
-    url = f"{SEARCH_API}?{query}"
-    req = urllib.request.Request(url, headers=_read_headers())
+    base = normalize_server(server)
+    url = f"{base}/rest/api/2/search?{query}"
+    req = urllib.request.Request(url, headers=_read_headers(base))
     attempts = 0
     while True:
         attempts += 1
@@ -179,7 +184,13 @@ def _discard_partial(dest: str) -> None:
         pass
 
 
-def download_file(url: str, dest: str, max_bytes: int | None = None) -> int:
+def download_file(
+    url: str,
+    dest: str,
+    max_bytes: int | None = None,
+    *,
+    server: str = DEFAULT_SERVER,
+) -> int:
     """Streamed GET of an attachment ``content`` URL to ``dest`` (read bucket).
 
     Like the other read helpers, authenticates when a credential resolves and
@@ -193,11 +204,17 @@ def download_file(url: str, dest: str, max_bytes: int | None = None) -> int:
     partial file is deleted and :class:`JiraError` is raised, carrying the
     HTTP ``code`` when there is one.
     """
+    base = normalize_server(server)
+    request_url = urllib.parse.urljoin(f"{base}/", url)
+    parsed = urllib.parse.urlsplit(request_url)
+    credential_server = urllib.parse.urlunsplit(
+        (parsed.scheme, parsed.netloc, "", "", "")
+    )
     headers: dict[str, str] = {}
-    creds = resolve_credentials_optional(JIRA_BASE)
+    creds = resolve_credentials_optional(credential_server or base)
     if creds is not None:
         headers["Authorization"] = basic_auth_header(*creds)
-    req = urllib.request.Request(url, headers=headers)
+    req = urllib.request.Request(request_url, headers=headers)
     try:
         written = 0
         with urllib.request.urlopen(req, timeout=20) as resp:

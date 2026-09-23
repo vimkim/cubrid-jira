@@ -56,6 +56,7 @@ from cubrid_jira.markdown import (
     markdown_to_jira_body,
 )
 from cubrid_jira.session import SessionClient
+from cubrid_jira.server import DEFAULT_SERVER, select_server
 from cubrid_jira.spacing import normalize_korean_jira_spacing
 from cubrid_jira.walk import fetch_recursive, save_issue
 from cubrid_jira.wizard import (
@@ -72,7 +73,6 @@ from cubrid_jira.wizard import (
     resolve_issuetype_id,
 )
 
-DEFAULT_SERVER = "http://jira.cubrid.org"
 ALLOWED_LINK_TYPES = ("Blocks", "Cloners", "Duplicate", "Relates")
 DRY_RUN_TOKEN_PLACEHOLDER = "<extracted-at-runtime>"
 DRY_RUN_ISSUETYPE_PLACEHOLDER = "<resolved-at-runtime>"
@@ -293,7 +293,9 @@ def _resolve_custom_fields(args, client: JiraClient) -> dict[str, object]:
     if all(is_custom_field_id(n) for n, _ in parsed):
         return {n: v for n, v in parsed}
 
-    map_path = resolve_field_map_path(getattr(args, "dir", None))
+    map_path = resolve_field_map_path(
+        getattr(args, "dir", None), server=args.server,
+    )
     index = load_field_index(map_path)
 
     needed = [n for n, _ in parsed if not is_custom_field_id(n)]
@@ -368,7 +370,8 @@ def cmd_search(args) -> None:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
 
-    out_dir = resolve_cache_dir(args.dir)
+    server = args.server
+    out_dir = resolve_cache_dir(args.dir, server=server)
     out_dir.mkdir(parents=True, exist_ok=True)
 
     if getattr(args, "cache_only", False):
@@ -380,11 +383,13 @@ def cmd_search(args) -> None:
         print(f"Error: No cached markdown for {key}", file=sys.stderr)
         sys.exit(1)
 
-    print(f"# Fetching {key} from jira.cubrid.org ...", file=sys.stderr)
+    print(f"# Fetching {key} from {server} ...", file=sys.stderr)
     max_depth = 0 if args.no_recurse else 1
     visited: set[str] = set()
     try:
-        fetched = fetch_recursive(key, max_depth, visited, out_dir, force=True)
+        fetched = fetch_recursive(
+            key, max_depth, visited, out_dir, force=True, server=server,
+        )
     except JiraError as e:
         # 401 aborts the walk on the first attempt (CAPTCHA lockout footgun);
         # honor the exit-code contract instead of the generic exit 1.
@@ -403,7 +408,7 @@ def cmd_search(args) -> None:
 
 
 # --------------------------------------------------------------------------- #
-# jql (read-only, unauthenticated list search)
+# jql (read-only list search; authenticated when credentials resolve)
 # --------------------------------------------------------------------------- #
 
 def cmd_jql(args) -> None:
@@ -423,6 +428,7 @@ def cmd_jql(args) -> None:
             fields=fields,
             max_results=args.max,
             start_at=args.start_at,
+            server=args.server,
         )
     except JiraError as e:
         print(f"Error: {e}", file=sys.stderr)
@@ -431,7 +437,7 @@ def cmd_jql(args) -> None:
     if output == "json":
         print(json.dumps(result, ensure_ascii=False))
     else:
-        print(format_search_results_markdown(result))
+        print(format_search_results_markdown(result, server=args.server))
 
 
 # --------------------------------------------------------------------------- #
@@ -487,8 +493,11 @@ def _print_attachment_manifest(key, manifest, output, out_dir=None):
 
 def cmd_attachment(args) -> None:
     key = parse_issue_key(args.issue)
+    server = args.server
     try:
-        result = search_issues(f"key = {key}", fields="attachment", max_results=1)
+        result = search_issues(
+            f"key = {key}", fields="attachment", max_results=1, server=server,
+        )
     except JiraError as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(exit_code_for_http(e.code))
@@ -510,7 +519,7 @@ def cmd_attachment(args) -> None:
         _print_attachment_manifest(key, manifest, output)
         return
 
-    out_dir = resolve_attachment_dir(key, args.out)
+    out_dir = resolve_attachment_dir(key, args.out, server=server)
     if atts:
         out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -533,7 +542,10 @@ def cmd_attachment(args) -> None:
         else:
             dest = out_dir / name
             try:
-                download_file(a.get("content"), str(dest), max_bytes=args.max_bytes)
+                download_file(
+                    a.get("content"), str(dest),
+                    max_bytes=args.max_bytes, server=server,
+                )
                 entry["downloaded"] = True
                 entry["path"] = str(dest)
             except JiraError as e:
@@ -602,10 +614,10 @@ def cmd_create(args) -> None:
 
     live_result: dict | None = None
     if new_key:
-        cache_dir = resolve_cache_dir(args.dir)
+        cache_dir = resolve_cache_dir(args.dir, server=args.server)
         cache_dir.mkdir(parents=True, exist_ok=True)
         try:
-            full = fetch_issue(new_key)
+            full = fetch_issue(new_key, server=args.server)
         except JiraError as e:
             # The write above already succeeded; a failed cache refresh must
             # not turn the command into a failure. Report and move on.
@@ -613,7 +625,7 @@ def cmd_create(args) -> None:
                   file=sys.stderr)
             full = {}
         if full:
-            save_issue(full, cache_dir)
+            save_issue(full, cache_dir, server=args.server)
         url = f"{args.server.rstrip('/')}/browse/{new_key}"
         live_result = {
             "key": new_key,
@@ -655,7 +667,7 @@ def cmd_comment(args) -> None:
         _emit(args, client, None)
         return
 
-    cache_dir = resolve_cache_dir(args.dir)
+    cache_dir = resolve_cache_dir(args.dir, server=args.server)
     invalidate(key, cache_dir)
     live_result = {"issue": key, "comment_id": (resp or {}).get("id")}
     if _output_format(args) == "text":
@@ -729,7 +741,7 @@ def cmd_comment_update(args) -> None:
         _emit(args, client, None)
         return
 
-    cache_dir = resolve_cache_dir(args.dir)
+    cache_dir = resolve_cache_dir(args.dir, server=args.server)
     invalidate(key, cache_dir)
     live_result = {"issue": key, "comment_id": args.id, "updated": True}
     if _output_format(args) == "text":
@@ -757,7 +769,7 @@ def cmd_comment_delete(args) -> None:
         _emit(args, client, None)
         return
 
-    cache_dir = resolve_cache_dir(args.dir)
+    cache_dir = resolve_cache_dir(args.dir, server=args.server)
     invalidate(key, cache_dir)
     live_result = {"issue": key, "comment_id": args.id, "deleted": True}
     if _output_format(args) == "text":
@@ -788,7 +800,7 @@ def cmd_link(args) -> None:
         _emit(args, client, None)
         return
 
-    cache_dir = resolve_cache_dir(args.dir)
+    cache_dir = resolve_cache_dir(args.dir, server=args.server)
     invalidate(src, cache_dir)
     invalidate(dst, cache_dir)
     if _output_format(args) == "text":
@@ -837,7 +849,7 @@ def cmd_transition(args) -> None:
         _emit(args, client, None)
         return
 
-    cache_dir = resolve_cache_dir(args.dir)
+    cache_dir = resolve_cache_dir(args.dir, server=args.server)
     invalidate(key, cache_dir)
     if _output_format(args) == "text":
         print(
@@ -862,7 +874,7 @@ def cmd_assign(args) -> None:
         _emit(args, client, None)
         return
 
-    cache_dir = resolve_cache_dir(args.dir)
+    cache_dir = resolve_cache_dir(args.dir, server=args.server)
     invalidate(key, cache_dir)
     assignee = args.to if args.to else None
     if _output_format(args) == "text":
@@ -918,7 +930,7 @@ def cmd_update(args) -> None:
         _emit(args, client, None)
         return
 
-    cache_dir = resolve_cache_dir(args.dir)
+    cache_dir = resolve_cache_dir(args.dir, server=args.server)
     invalidate(key, cache_dir)
     if _output_format(args) == "text":
         print(
@@ -1013,7 +1025,9 @@ def _drive_task_to_subtask(
     check_xsrf(html)
 
 
-def _fetch_meta(key: str) -> tuple[str, str, str | None]:
+def _fetch_meta(
+    key: str, *, server: str = DEFAULT_SERVER
+) -> tuple[str, str, str | None]:
     """Return ``(issue_id, issuetype_name, parent_key_or_None)`` for ``key``.
 
     A 401 exits 2 per the exit-code contract (never "not found"). On any
@@ -1021,7 +1035,7 @@ def _fetch_meta(key: str) -> tuple[str, str, str | None]:
     the underlying HTTP/network reason to stderr.
     """
     try:
-        data = fetch_issue(key)
+        data = fetch_issue(key, server=server)
     except JiraError as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(exit_code_for_http(e.code))
@@ -1049,7 +1063,7 @@ def cmd_convert_to_issue(args) -> None:
     key = parse_issue_key(args.issue)
     target_type = args.type or "Task"
 
-    issue_id, cur_type, cur_parent = _fetch_meta(key)
+    issue_id, cur_type, cur_parent = _fetch_meta(key, server=args.server)
     if cur_type != "Sub-task":
         print(
             f"Error: {key} is currently type={cur_type!r}; convert-to-issue "
@@ -1082,19 +1096,19 @@ def cmd_convert_to_issue(args) -> None:
 
     _drive_subtask_to_task(session, issue_id, atl_token, guid, issuetype_id)
 
-    _, after_type, after_parent = _fetch_meta(key)
+    _, after_type, after_parent = _fetch_meta(key, server=args.server)
     if after_type != target_type or after_parent is not None:
         print(
             f"!!! WARNING: {key} did NOT land in the expected state.\n"
             f"!!!   wanted type={target_type!r}, parent=(none)\n"
             f"!!!   got    type={after_type!r}, parent={after_parent!r}\n"
             f"!!! Manual recovery may be required: "
-            f"http://jira.cubrid.org/browse/{key}",
+            f"{args.server.rstrip('/')}/browse/{key}",
             file=sys.stderr,
         )
         sys.exit(1)
 
-    cache_dir = resolve_cache_dir(args.dir)
+    cache_dir = resolve_cache_dir(args.dir, server=args.server)
     invalidate(key, cache_dir)
     if cur_parent:
         invalidate(cur_parent, cache_dir)
@@ -1123,7 +1137,7 @@ def cmd_convert_to_subtask(args) -> None:
     parent_key = parse_issue_key(args.to)
     target_type = args.type or "Sub-task"
 
-    issue_id, cur_type, _cur_parent = _fetch_meta(key)
+    issue_id, cur_type, _cur_parent = _fetch_meta(key, server=args.server)
     if cur_type == "Sub-task":
         print(
             f"Error: {key} is already a Sub-task. Use 'reparent' to move "
@@ -1132,7 +1146,7 @@ def cmd_convert_to_subtask(args) -> None:
         )
         sys.exit(1)
 
-    _parent_id, parent_type, _ = _fetch_meta(parent_key)
+    _parent_id, parent_type, _ = _fetch_meta(parent_key, server=args.server)
     if parent_type == "Sub-task":
         print(
             f"Error: --to {parent_key!r} is itself a Sub-task. Choose a "
@@ -1168,19 +1182,19 @@ def cmd_convert_to_subtask(args) -> None:
         session, issue_id, atl_token, guid, issuetype_id, parent_key
     )
 
-    _, after_type, after_parent = _fetch_meta(key)
+    _, after_type, after_parent = _fetch_meta(key, server=args.server)
     if after_type != target_type or after_parent != parent_key:
         print(
             f"!!! WARNING: {key} did NOT land in the expected state.\n"
             f"!!!   wanted type={target_type!r}, parent={parent_key!r}\n"
             f"!!!   got    type={after_type!r}, parent={after_parent!r}\n"
             f"!!! Manual recovery may be required: "
-            f"http://jira.cubrid.org/browse/{key}",
+            f"{args.server.rstrip('/')}/browse/{key}",
             file=sys.stderr,
         )
         sys.exit(1)
 
-    cache_dir = resolve_cache_dir(args.dir)
+    cache_dir = resolve_cache_dir(args.dir, server=args.server)
     invalidate(key, cache_dir)
     invalidate(parent_key, cache_dir)
 
@@ -1208,7 +1222,7 @@ def cmd_reparent(args) -> None:
     intermediate_type = "Task"
     target_type = "Sub-task"
 
-    issue_id, cur_type, cur_parent = _fetch_meta(key)
+    issue_id, cur_type, cur_parent = _fetch_meta(key, server=args.server)
     if cur_type != "Sub-task":
         print(
             f"Error: {key} is currently type={cur_type!r}; reparent requires "
@@ -1223,7 +1237,7 @@ def cmd_reparent(args) -> None:
         )
         sys.exit(1)
 
-    _np_id, np_type, _ = _fetch_meta(new_parent_key)
+    _np_id, np_type, _ = _fetch_meta(new_parent_key, server=args.server)
     if np_type == "Sub-task":
         print(
             f"Error: --to {new_parent_key!r} is itself a Sub-task. Choose a "
@@ -1268,7 +1282,7 @@ def cmd_reparent(args) -> None:
         sys.exit(1)
     _drive_subtask_to_task(session, issue_id, atl_token, guid, fwd_type)
 
-    _, inter_type, inter_parent = _fetch_meta(key)
+    _, inter_type, inter_parent = _fetch_meta(key, server=args.server)
     if inter_type != intermediate_type or inter_parent is not None:
         print(
             f"!!! WARNING: forward conversion of {key} did NOT land in "
@@ -1298,7 +1312,7 @@ def cmd_reparent(args) -> None:
             rev_type,
             new_parent_key,
         )
-        _, final_type, final_parent = _fetch_meta(key)
+        _, final_type, final_parent = _fetch_meta(key, server=args.server)
         if final_type != target_type or final_parent != new_parent_key:
             raise RuntimeError(
                 f"final state after reverse conversion: "
@@ -1309,16 +1323,16 @@ def cmd_reparent(args) -> None:
             "\n!!! ATOMICITY WARNING: reparent FAILED after the forward "
             "conversion succeeded.\n"
             f"!!! {key} is now a Task with no parent and needs recovery.\n"
-            f"!!! Open http://jira.cubrid.org/browse/{key} and either:\n"
+            f"!!! Open {args.server.rstrip('/')}/browse/{key} and either:\n"
             f"!!!   - Convert to Sub-task of {new_parent_key} via the web UI, or\n"
             f"!!!   - Re-run: cubrid-jira convert-to-subtask {key} "
-            f"--to {new_parent_key} --yes\n"
+            f"--to {new_parent_key} --server {args.server} --yes\n"
             f"!!! Cause: {exc}",
             file=sys.stderr,
         )
         sys.exit(1)
 
-    cache_dir = resolve_cache_dir(args.dir)
+    cache_dir = resolve_cache_dir(args.dir, server=args.server)
     invalidate(key, cache_dir)
     if cur_parent:
         invalidate(cur_parent, cache_dir)
@@ -1382,7 +1396,7 @@ def _add_write_globals(p: argparse.ArgumentParser) -> None:
     )
     p.add_argument(
         "--server",
-        default=DEFAULT_SERVER,
+        default=None,
         help=(
             f"JIRA server base URL (default: {DEFAULT_SERVER}); "
             "use http://jira.cubrid.com for RND issues."
@@ -1435,6 +1449,11 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p_search.add_argument("issue", help="Issue key (e.g. CBRD-12345) or full browse URL")
     p_search.add_argument(
+        "--server",
+        default=None,
+        help=f"JIRA server base URL (default: {DEFAULT_SERVER}).",
+    )
+    p_search.add_argument(
         "-d", "--dir", default=None, metavar="DIR",
         help="Cache directory (default: $CUBRID_JIRA_DIR or "
              "~/.local/share/cubrid-jira/issues/).",
@@ -1454,7 +1473,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     p_jql = sub.add_parser(
         "jql",
-        help="Run a JQL query and list matching issues (read-only, unauthenticated).",
+        help="Run a JQL query and list matching issues (read-only).",
     )
     p_jql.add_argument(
         "jql",
@@ -1481,6 +1500,11 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Output format. 'text' prints a markdown table; 'json' prints the "
              "raw /rest/api/2/search response on one line (for jq/agents).",
     )
+    p_jql.add_argument(
+        "--server",
+        default=DEFAULT_SERVER,
+        help=f"JIRA server base URL (default: {DEFAULT_SERVER}).",
+    )
     p_jql.set_defaults(func=cmd_jql)
 
     p_attach = sub.add_parser(
@@ -1505,10 +1529,11 @@ def _build_parser() -> argparse.ArgumentParser:
              "= 5 MiB); oversize attachments are still listed in the manifest. "
              "Enforced on received bytes, not the server-reported size.",
     )
-    # No --server flag: the metadata read (search_issues) and credential
-    # resolution are hard-wired to JIRA_BASE, so honoring a custom server for
-    # the download half only would silently return wrong answers. Re-add once
-    # the whole read path takes a base URL.
+    p_attach.add_argument(
+        "--server",
+        default=None,
+        help=f"JIRA server base URL (default: {DEFAULT_SERVER}).",
+    )
     p_attach.add_argument(
         "--output", choices=("text", "json"), default="text",
         help="Output format. 'text' prints a per-file table; 'json' prints the "
@@ -1693,6 +1718,14 @@ def _build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> None:
     parser = _build_parser()
     args = parser.parse_args(argv)
+    if hasattr(args, "server"):
+        try:
+            args.server = select_server(
+                getattr(args, "issue", ""), args.server,
+            )
+        except ValueError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            sys.exit(1)
     args.func(args)
 
 

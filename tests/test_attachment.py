@@ -45,7 +45,7 @@ def _canned(attachments):
 
 
 def _stub_download(monkeypatch, downloaded_urls=None, payload=b"x" * 100):
-    def _fake_dl(url, dest, max_bytes=None):
+    def _fake_dl(url, dest, max_bytes=None, **_kwargs):
         if downloaded_urls is not None:
             downloaded_urls.append(url)
         with open(dest, "wb") as fh:
@@ -58,7 +58,7 @@ def _stub_download(monkeypatch, downloaded_urls=None, payload=b"x" * 100):
 def test_list_json_is_metadata_only(monkeypatch, capsys):
     monkeypatch.setattr(cli, "search_issues", lambda *a, **k: _canned([ATT_SMALL]))
 
-    def _boom(url, dest, max_bytes=None):
+    def _boom(url, dest, max_bytes=None, **_kwargs):
         raise AssertionError("download must not run in --list mode")
 
     monkeypatch.setattr(cli, "download_file", _boom)
@@ -194,6 +194,29 @@ def test_download_file_within_cap_succeeds(fake_server, tmp_path):
     assert dest.read_bytes() == b"y" * 500
 
 
+def test_download_resolves_credentials_for_attachment_hostname(
+    fake_server, tmp_path, monkeypatch
+):
+    targets = []
+
+    def resolve(server):
+        targets.append(server)
+        return ("alternate-user", "alternate-password")
+
+    monkeypatch.setattr(http, "resolve_credentials_optional", resolve)
+    url = "http://jira.cubrid.com/secure/attachment/1/repro.sql"
+    fake_server.route("GET", "/secure/attachment/1/repro.sql", response=b"data")
+
+    download_file(
+        url,
+        str(tmp_path / "repro.sql"),
+        server="http://jira.cubrid.org",
+    )
+
+    assert targets == ["http://jira.cubrid.com"]
+    assert fake_server.requests[-1].url == url
+
+
 # --------------------------------------------------------------------------- #
 # F5 — filesystem failures become a manifest entry, not a traceback, and the
 # one-JSON-object stdout contract survives.
@@ -204,7 +227,7 @@ def test_oserror_is_reported_in_manifest(monkeypatch, capsys, tmp_path):
 
     calls = []
 
-    def _fail_first(url, dest, max_bytes=None):
+    def _fail_first(url, dest, max_bytes=None, **_kwargs):
         calls.append(url)
         if len(calls) == 1:
             raise JiraError(f"Filesystem error writing {dest}: disk full")
@@ -275,15 +298,20 @@ def test_download_401_aborts_whole_command(fake_server, capsys, tmp_path):
 
 
 # --------------------------------------------------------------------------- #
-# F6 — --server was silently half-ignored (reads are hard-wired to JIRA_BASE);
-# it must now be rejected loudly.
+# F6 — --server must select the instance for both metadata and downloads.
 # --------------------------------------------------------------------------- #
 
-def test_attachment_rejects_server_flag(capsys):
-    with pytest.raises(SystemExit) as ei:
-        main(["attachment", "CBRD-1", "--server", "http://other.example.com"])
-    assert ei.value.code == 2  # argparse usage error
-    assert "--server" in capsys.readouterr().err
+def test_attachment_uses_selected_server_for_metadata(fake_server, capsys):
+    fake_server.route("GET", "", response=_canned([ATT_SMALL]))
+
+    main([
+        "attachment", "RND-2851", "--list",
+        "--server", "http://jira.cubrid.com",
+        "--output", "json",
+    ])
+
+    assert json.loads(capsys.readouterr().out)["count"] == 1
+    assert fake_server.requests[-1].url.startswith("http://jira.cubrid.com/")
 
 
 # --------------------------------------------------------------------------- #

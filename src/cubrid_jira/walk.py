@@ -13,6 +13,7 @@ from pathlib import Path
 
 from cubrid_jira.http import JiraError, exit_code_for_http, fetch_issue, parse_issue_key
 from cubrid_jira.markdown import extract_related_keys, format_issue_markdown
+from cubrid_jira.server import DEFAULT_SERVER
 
 
 def issue_path(key: str, out_dir: Path, raw_json: bool) -> Path:
@@ -20,14 +21,20 @@ def issue_path(key: str, out_dir: Path, raw_json: bool) -> Path:
     return out_dir / f"{key}{ext}"
 
 
-def save_issue(data: dict, out_dir: Path, raw_json: bool = False) -> Path:
+def save_issue(
+    data: dict,
+    out_dir: Path,
+    raw_json: bool = False,
+    *,
+    server: str = DEFAULT_SERVER,
+) -> Path:
     """Write a single issue to ``out_dir/{KEY}.md`` (or ``.json``)."""
     key = data.get("key", "UNKNOWN")
     path = issue_path(key, out_dir, raw_json)
     content = (
         json.dumps(data, indent=2, ensure_ascii=False)
         if raw_json
-        else format_issue_markdown(data)
+        else format_issue_markdown(data, server=server)
     )
     path.write_text(content, encoding="utf-8")
     return path
@@ -41,6 +48,8 @@ def fetch_recursive(
     raw_json: bool = False,
     force: bool = False,
     current_depth: int = 0,
+    *,
+    server: str = DEFAULT_SERVER,
 ) -> bool:
     if key in visited or current_depth > max_depth:
         return False
@@ -52,28 +61,28 @@ def fetch_recursive(
     if not force and already_exists:
         print(f"Skipping {key} (already exists: {path})", file=sys.stderr)
         if current_depth < max_depth:
-            data = fetch_issue(key)
+            data = fetch_issue(key, server=server)
             if data:
                 for _rel, rkey in extract_related_keys(data):
                     fetch_recursive(
                         rkey, max_depth, visited, out_dir,
-                        raw_json, force, current_depth + 1,
+                        raw_json, force, current_depth + 1, server=server,
                     )
         return True
 
     print(f"Fetching {key} (depth {current_depth})...", file=sys.stderr)
-    data = fetch_issue(key)
+    data = fetch_issue(key, server=server)
     if not data:
         return False
 
-    save_issue(data, out_dir, raw_json=raw_json)
+    save_issue(data, out_dir, raw_json=raw_json, server=server)
     print(f"  Saved -> {path}", file=sys.stderr)
 
     if current_depth < max_depth:
         for _rel, rkey in extract_related_keys(data):
             fetch_recursive(
                 rkey, max_depth, visited, out_dir,
-                raw_json, force, current_depth + 1,
+                raw_json, force, current_depth + 1, server=server,
             )
     return True
 

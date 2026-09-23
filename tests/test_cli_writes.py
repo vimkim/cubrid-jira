@@ -85,6 +85,32 @@ def test_create_live_posts_and_caches(fake_server, tmp_path, monkeypatch):
     assert (tmp_path / "CBRD-999.md").exists()
 
 
+def test_create_refreshes_selected_server_and_isolates_its_cache(
+    fake_server, tmp_path, monkeypatch
+):
+    monkeypatch.setenv("CUBRID_JIRA_DIR", str(tmp_path))
+    fake_server.route(
+        "POST", "/rest/api/2/issue", response={"id": "1", "key": "RND-999"}
+    )
+    fake_server.route(
+        "GET", "/rest/api/2/issue/RND-999?expand=renderedFields",
+        response={"key": "RND-999", "fields": {"summary": "hello"}},
+    )
+
+    main([
+        "create", "--project", "RND", "--type", "Bug", "--summary", "hello",
+        "--server", "http://jira.cubrid.com", "--yes",
+    ])
+
+    assert all(
+        request.url.startswith("http://jira.cubrid.com/")
+        for request in fake_server.requests
+    )
+    cached = tmp_path / "jira.cubrid.com" / "RND-999.md"
+    assert cached.exists()
+    assert "http://jira.cubrid.com/browse/RND-999" in cached.read_text()
+
+
 def test_create_description_spaces_jira_markup_next_to_korean(
     fake_server, tmp_path, monkeypatch
 ):
@@ -816,6 +842,32 @@ def test_create_with_field_name_fetches_and_caches_map(
     # Dry-run body printed to stdout contains the resolved id.
     body = json.loads(capsys.readouterr().out)
     assert body["fields"]["customfield_210565"] == "Not applicable; analysis ticket"
+
+
+def test_create_with_field_name_isolates_alternate_server_map(
+    fake_server, tmp_path, monkeypatch, capsys
+):
+    monkeypatch.setenv("CUBRID_JIRA_DIR", str(tmp_path))
+    fake_server.route(
+        "GET", "/rest/api/2/field",
+        response=[
+            {"id": "customfield_999", "name": "QA Scenario", "custom": True},
+        ],
+    )
+
+    main([
+        "create", "--project", "RND", "--type", "Bug", "--summary", "x",
+        "--field", "QA Scenario=alternate",
+        "--server", "http://jira.cubrid.com",
+    ])
+
+    assert fake_server.requests[0].url == "http://jira.cubrid.com/rest/api/2/field"
+    map_file = tmp_path / "jira.cubrid.com" / "field-map.json"
+    assert json.loads(map_file.read_text())["QA Scenario"] == ["customfield_999"]
+    assert not (tmp_path / "field-map.json").exists()
+    assert json.loads(capsys.readouterr().out)["fields"]["customfield_999"] == (
+        "alternate"
+    )
 
 
 def test_create_with_field_name_uses_cache_on_second_call(

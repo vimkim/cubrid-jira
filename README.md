@@ -49,7 +49,7 @@ server from an issue-key prefix.
 | Target | Command form |
 |---|---|
 | `jira.cubrid.org` (default; for example, `CBRD-*`) | Omit `--server`. |
-| `jira.cubrid.com` (for example, `RND-*`) | On commands that expose the flag, add `--server http://jira.cubrid.com`. |
+| `jira.cubrid.com` (for example, `RND-*`) | Add `--server http://jira.cubrid.com`, or pass a full `.com` browse URL to a command that accepts an issue argument. |
 
 For example, to add and then verify a comment on an RND issue:
 
@@ -60,12 +60,9 @@ cubrid-jira comment-list RND-2851 \
   --server http://jira.cubrid.com --limit 1
 ```
 
-`search`, `jql`, and `attachment` are currently fixed to
-`http://jira.cubrid.org` and do not expose `--server`. In particular, passing a
-full `.com` browse URL to `search` does **not** select `.com`; the command extracts
-the issue key and still queries `.org`. Use a server-aware command such as
-`comment-list` when it fits the task, or use the `.com` REST API directly until
-server selection is added to those read commands.
+`search`, `jql`, and `attachment` all expose `--server`. Commands that accept an
+issue argument also infer the server from a full browse URL. If an explicit
+`--server` conflicts with that URL, the command fails before sending a request.
 
 Credentials are resolved for the selected hostname. If credentials differ,
 add separate `machine jira.cubrid.org` and `machine jira.cubrid.com` entries to
@@ -138,6 +135,8 @@ cubrid-jira search CBRD-26463 --cache-only    # offline/cache-only read
 cubrid-jira search CBRD-26463 --force         # deprecated; live fetch is default
 cubrid-jira search CBRD-26463 --no-recurse    # don't walk related issues
 cubrid-jira search CBRD-26463 --dir /tmp/jira # override cache directory
+cubrid-jira search RND-2851 --server http://jira.cubrid.com
+cubrid-jira search http://jira.cubrid.com/browse/RND-2851
 ```
 
 How it works:
@@ -155,6 +154,11 @@ Resolved in order (first match wins):
 1. `--dir DIR`
 2. `$CUBRID_JIRA_DIR`
 3. `~/.local/share/cubrid-jira/issues/` (default)
+
+The default `.org` server keeps this flat layout for backward compatibility.
+Alternate servers are isolated beneath a hostname directory, for example
+`$CUBRID_JIRA_DIR/jira.cubrid.com/RND-2851.md`, so identical issue keys on two
+installations cannot overwrite one another.
 
 Recommended one-time setup:
 
@@ -176,6 +180,7 @@ public projects otherwise — same as `search`'s fetch.
 cubrid-jira jql "assignee = jdoe AND status not in (Resolved, Closed, Done) ORDER BY updated DESC"
 cubrid-jira jql "project = CBRD AND created >= -7d" --max 100
 cubrid-jira jql "fixVersion = guava" --output json | jq '.issues[].key'
+cubrid-jira jql "project = RND" --server http://jira.cubrid.com
 ```
 
 | Flag | Default | Meaning |
@@ -184,6 +189,7 @@ cubrid-jira jql "fixVersion = guava" --output json | jq '.issues[].key'
 | `--max N` | `50` | `maxResults` — page size (must be ≥ 0). |
 | `--start-at N` | `0` | `startAt` — 0-based offset for pagination (must be ≥ 0). |
 | `--output {text,json}` | `text` | `text` = markdown table; `json` = the raw `/rest/api/2/search` response on one line. |
+| `--server URL` | `http://jira.cubrid.org` | Select the JIRA installation. |
 
 - **`text`** prints a markdown table: key (linked) · status · type · assignee · updated · summary, headed by `N of TOTAL matching issues`. Cell values are escaped so pipes/newlines can't corrupt the table.
 - **`json`** prints the server's response verbatim on one line — pipe into `jq` or hand to an agent.
@@ -238,7 +244,7 @@ cells and the bytes inside fenced code blocks are preserved by the Jira writer.
 
 Repeat `--field` to set any JIRA custom field (the canonical use case is project-required fields like CUBRID's `QA Scenario`, which gates every `create` against `CBRD`).
 
-- `FIELD` may be a raw id (`customfield_210565`) or a display name (`"QA Scenario"`). Names are resolved against `/rest/api/2/field` on first use and cached at `<cache_dir>/field-map.json`; subsequent calls skip the lookup.
+- `FIELD` may be a raw id (`customfield_210565`) or a display name (`"QA Scenario"`). Names are resolved against `/rest/api/2/field` on first use and cached at `<cache_dir>/field-map.json`; alternate servers use `<cache_dir>/<hostname>/field-map.json`. Subsequent calls skip the lookup.
 - `VALUE` starting with `{` or `[` is JSON-decoded — needed for **single-select**, **cascading-select**, **multi-select**, **user**, and **date** fields. Anything else is sent as a raw string (text/textarea fields).
 - Ambiguous display names (two custom fields with the same `name`) error out and ask you to disambiguate by id — silently picking one would risk writing to the wrong field.
 
@@ -496,6 +502,7 @@ The cache directory is shared by `cubrid-jira search` and the legacy `cubrid-jir
 - `cubrid-jira search KEY --cache-only` — prints cached markdown without network access, failing if the issue is not cached.
 - `cubrid-jira-fetch KEY --depth N` *(deprecated)* — bulk-fetches a transitive closure up to depth `N` and overwrites already-saved files by default. Pass `--skip-existing` for the old cache-extending behavior.
 - Field-write commands invalidate the affected key(s) (`link` invalidates both sides); structural-write commands invalidate 2–3 keys per the table above.
+- Default attachment downloads use `attachments/<KEY>/`; alternate servers use `attachments/<hostname>/<KEY>/`. An explicit `--out` remains exact and is not rewritten.
 
 ---
 
@@ -529,6 +536,7 @@ just search CBRD-26463
 | `walk.py` | Recursive related-issue walking + on-disk cache writes. |
 | `auth.py` | Credential resolution: env → netrc → error. |
 | `cache.py` | Cache directory resolution + prefix-safe invalidation. |
+| `server.py` | Default server, URL normalization, and browse-URL server selection. |
 | `legacy.py` | Deprecation shims for the old `cubrid-jira-search` / `cubrid-jira-fetch` binaries. |
 
 The `cubrid_jira_fetcher` import path remains as a deprecation shim that re-exports `cubrid_jira` and emits a `DeprecationWarning`. New code should `import cubrid_jira` directly.

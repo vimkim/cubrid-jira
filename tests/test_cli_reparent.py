@@ -174,6 +174,30 @@ def test_convert_to_issue_dry_run_records_three_steps(fake_server, capsys, tmp_p
     ]
 
 
+def test_convert_to_issue_preflight_uses_selected_server(
+    fake_server, capsys, tmp_path, monkeypatch
+):
+    monkeypatch.setenv("CUBRID_JIRA_DIR", str(tmp_path))
+    _route_meta(
+        fake_server,
+        "RND-9",
+        _meta_subtask("RND-9", "9", parent_key="RND-1"),
+    )
+
+    main([
+        "convert-to-issue", "RND-9",
+        "--server", "http://jira.cubrid.com",
+        "--output", "json",
+    ])
+
+    plan = json.loads(capsys.readouterr().out)
+    assert fake_server.requests[0].url.startswith("http://jira.cubrid.com/")
+    assert all(
+        request["url"].startswith("http://jira.cubrid.com/")
+        for request in plan["requests"]
+    )
+
+
 def test_reparent_dry_run_records_six_steps(fake_server, capsys, tmp_path, monkeypatch):
     monkeypatch.setenv("CUBRID_JIRA_DIR", str(tmp_path))
     _route_meta(fake_server, "CBRD-9", _meta_subtask("CBRD-9", "9", parent_key="CBRD-1"))
@@ -393,7 +417,10 @@ def test_reparent_atomicity_warning_when_reverse_fails(
     # The loud warning must mention the stranded state AND the recovery path.
     assert "ATOMICITY WARNING" in err
     assert "Task with no parent" in err
-    assert "convert-to-subtask CBRD-9 --to CBRD-2" in err
+    assert (
+        "convert-to-subtask CBRD-9 --to CBRD-2 "
+        "--server http://jira.cubrid.org --yes"
+    ) in err
 
 
 # --------------------------------------------------------------------------- #

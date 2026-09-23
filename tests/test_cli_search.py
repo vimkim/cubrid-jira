@@ -8,6 +8,7 @@ import pytest
 
 from conftest import PANDOC_HAS_JIRA, make_http_error
 from cubrid_jira.cli import main
+from cubrid_jira.legacy import search_main
 from cubrid_jira.walk import bulk_fetch_main
 
 
@@ -24,6 +25,15 @@ def _issue(key: str, summary: str) -> dict:
             "updated": "2026-01-02T00:00:00.000+0000",
         },
     }
+
+
+@pytest.mark.parametrize("command", ["search", "jql", "attachment"])
+def test_read_command_help_exposes_server(command, capsys):
+    with pytest.raises(SystemExit) as exc:
+        main([command, "--help"])
+
+    assert exc.value.code == 0
+    assert "--server" in capsys.readouterr().out
 
 
 def test_search_fetches_live_and_overwrites_stale_cache(
@@ -90,6 +100,123 @@ def test_search_force_is_accepted_as_live_fetch_compatibility_flag(
     out = capsys.readouterr()
     assert "fresh via force" in out.out
     assert "stale marker" not in out.out
+
+
+def test_search_explicit_server_uses_selected_instance(
+    fake_server, tmp_path, monkeypatch, capsys
+):
+    monkeypatch.setenv("CUBRID_JIRA_DIR", str(tmp_path))
+    fake_server.route(
+        "GET",
+        "/rest/api/2/issue/RND-2851?expand=renderedFields",
+        response=_issue("RND-2851", "alternate server"),
+    )
+
+    main([
+        "search", "RND-2851",
+        "--server", "http://jira.cubrid.com",
+        "--no-recurse",
+    ])
+
+    out = capsys.readouterr()
+    assert "alternate server" in out.out
+    assert fake_server.requests[0].url.startswith("http://jira.cubrid.com/")
+    assert "jira.cubrid.org" not in fake_server.requests[0].url
+    cached = tmp_path / "jira.cubrid.com" / "RND-2851.md"
+    assert cached.exists()
+    assert "http://jira.cubrid.com/browse/RND-2851" in cached.read_text()
+
+
+def test_search_infers_server_from_browse_url(
+    fake_server, tmp_path, monkeypatch, capsys
+):
+    monkeypatch.setenv("CUBRID_JIRA_DIR", str(tmp_path))
+    fake_server.route(
+        "GET",
+        "/rest/api/2/issue/RND-2851?expand=renderedFields",
+        response=_issue("RND-2851", "inferred server"),
+    )
+
+    main([
+        "search", "http://jira.cubrid.com/browse/RND-2851", "--no-recurse",
+    ])
+
+    assert "inferred server" in capsys.readouterr().out
+    assert fake_server.requests[0].url.startswith("http://jira.cubrid.com/")
+
+
+def test_search_rejects_conflicting_explicit_and_browse_url_servers(
+    fake_server, tmp_path, monkeypatch, capsys
+):
+    monkeypatch.setenv("CUBRID_JIRA_DIR", str(tmp_path))
+
+    with pytest.raises(SystemExit) as exc:
+        main([
+            "search", "http://jira.cubrid.com/browse/RND-2851",
+            "--server", "http://jira.cubrid.org",
+        ])
+
+    assert exc.value.code == 1
+    assert "conflicts with browse URL server" in capsys.readouterr().err
+    assert fake_server.requests == []
+
+
+def test_search_explicit_server_wins_when_browse_url_host_matches(
+    fake_server, tmp_path, monkeypatch, capsys
+):
+    monkeypatch.setenv("CUBRID_JIRA_DIR", str(tmp_path))
+    fake_server.route(
+        "GET",
+        "/rest/api/2/issue/RND-2851?expand=renderedFields",
+        response=_issue("RND-2851", "explicit scheme"),
+    )
+
+    main([
+        "search", "http://JIRA.CUBRID.COM/browse/RND-2851",
+        "--server", "https://jira.cubrid.com",
+        "--no-recurse",
+    ])
+
+    assert "explicit scheme" in capsys.readouterr().out
+    assert fake_server.requests[0].url.startswith("https://jira.cubrid.com/")
+
+
+def test_search_keeps_recursive_reads_and_related_links_on_selected_server(
+    fake_server, tmp_path, monkeypatch, capsys
+):
+    monkeypatch.setenv("CUBRID_JIRA_DIR", str(tmp_path))
+    root = _issue("RND-2851", "root")
+    root["fields"]["issuelinks"] = [
+        {
+            "type": {"name": "Relates"},
+            "outwardIssue": {"key": "RND-2852"},
+        }
+    ]
+    fake_server.route(
+        "GET",
+        "/rest/api/2/issue/RND-2851?expand=renderedFields",
+        response=root,
+    )
+    fake_server.route(
+        "GET",
+        "/rest/api/2/issue/RND-2852?expand=renderedFields",
+        response=_issue("RND-2852", "related"),
+    )
+
+    main(["search", "RND-2851", "--server", "http://jira.cubrid.com"])
+
+    capsys.readouterr()
+    assert len(fake_server.requests) == 2
+    assert all(
+        request.url.startswith("http://jira.cubrid.com/")
+        for request in fake_server.requests
+    )
+    cache_dir = tmp_path / "jira.cubrid.com"
+    assert (cache_dir / "RND-2852.md").exists()
+    assert (
+        "http://jira.cubrid.com/browse/RND-2852"
+        in (cache_dir / "RND-2851.md").read_text()
+    )
 
 
 def test_search_fetch_failure_does_not_print_stale_cache(
@@ -203,4 +330,21 @@ def test_legacy_fetch_skip_existing_keeps_cache_without_http(
         (out_dir / "CBRD-1.md").read_text(encoding="utf-8")
         == "# stale marker\n"
     )
+    assert fake_server.requests == []
+
+
+def test_legacy_search_keeps_default_server_compatibility(
+    fake_server, tmp_path, monkeypatch, capsys
+):
+    monkeypatch.setenv("CUBRID_JIRA_DIR", str(tmp_path))
+    (tmp_path / "CBRD-1.md").write_text("# cached legacy\n", encoding="utf-8")
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["cubrid-jira-search", "CBRD-1", "--cache-only"],
+    )
+
+    search_main()
+
+    assert "# cached legacy" in capsys.readouterr().out
     assert fake_server.requests == []

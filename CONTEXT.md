@@ -1,8 +1,9 @@
 # cubrid-jira
 
-CLI client for the CUBRID Jira Server (jira.cubrid.org). Reads are cache-first
-and work anonymously on public projects; writes require credentials and are
-dry-run by default.
+CLI client for the CUBRID Jira Server installations (`jira.cubrid.org` by
+default, or an explicitly selected/inferred alternate such as
+`jira.cubrid.com`). Reads are cache-first and work anonymously on public
+projects; writes require credentials and are dry-run by default.
 
 ## Language
 

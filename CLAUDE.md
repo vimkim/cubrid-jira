@@ -10,7 +10,8 @@ credentials         env CUBRID_JIRA_USER + CUBRID_JIRA_PASSWORD
                     (no interactive prompt; falls back to ~/.netrc)
                     reads (incl. attachment) fall back to anonymous access
 cache directory     $CUBRID_JIRA_DIR  ||  ~/.local/share/cubrid-jira/issues/
-attachments dir     --out || $CUBRID_JIRA_DIR/attachments/<KEY> || ~/.local/share/cubrid-jira/attachments/<KEY>
+                    (default server is flat; alternates use <hostname>/)
+attachments dir     --out || <state>/attachments/[<alternate-host>/]<KEY>
 output (stdout)     markdown or JSON
 output (stderr)     status + errors
 machine-readable    add `--output json` to write subcommands or to `jql`
@@ -59,6 +60,7 @@ markdown.py   Jira-wiki → markdown rendering; pure
 walk.py       recursive related-issue traversal + save_issue cache write
 auth.py       env → netrc → error credential resolution
 cache.py      cache dir resolve + prefix-safe invalidation
+server.py     server default + normalization + browse-URL inference
 legacy.py     deprecation shims for cubrid-jira-search / cubrid-jira-fetch
 ```
 

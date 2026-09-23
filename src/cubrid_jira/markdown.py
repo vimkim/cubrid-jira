@@ -17,7 +17,7 @@ import re
 import subprocess
 import sys
 
-from cubrid_jira.http import JIRA_BASE  # constant-only import — no cycles
+from cubrid_jira.server import DEFAULT_SERVER, normalize_server
 from cubrid_jira.spacing import normalize_korean_jira_spacing
 
 KOREAN = r"[\u1100-\u11FF\u3130-\u318F\uAC00-\uD7AF]"
@@ -531,7 +531,9 @@ def _md_cell(value: object) -> str:
     )
 
 
-def format_search_results_markdown(result: dict) -> str:
+def format_search_results_markdown(
+    result: dict, *, server: str = DEFAULT_SERVER
+) -> str:
     """Render a ``/rest/api/2/search`` response as a compact markdown table.
 
     Pure rendering, like :func:`format_issue_markdown` — no network import.
@@ -558,7 +560,7 @@ def format_search_results_markdown(result: dict) -> str:
         assignee = _md_cell((fields.get("assignee") or {}).get("displayName", "Unassigned"))
         updated = _md_cell((fields.get("updated") or "")[:10])
         summary = _md_cell(fields.get("summary") or "")
-        link = f"{JIRA_BASE}/browse/{key}"
+        link = f"{normalize_server(server)}/browse/{key}"
         lines.append(
             f"| [{key}]({link}) | {status} | {issue_type} | "
             f"{assignee} | {updated} | {summary} |"
@@ -566,7 +568,7 @@ def format_search_results_markdown(result: dict) -> str:
     return "\n".join(lines)
 
 
-def format_issue_markdown(data: dict) -> str:
+def format_issue_markdown(data: dict, *, server: str = DEFAULT_SERVER) -> str:
     """Format an issue dict as a human-readable markdown document."""
     if not data:
         return "(no data)"
@@ -577,7 +579,8 @@ def format_issue_markdown(data: dict) -> str:
     lines: list[str] = []
     summary = fields.get("summary", "(no summary)")
     lines.append(f"# [{key}] {summary}")
-    lines.append(f"\n<{JIRA_BASE}/browse/{key}>")
+    base = normalize_server(server)
+    lines.append(f"\n<{base}/browse/{key}>")
 
     lines.append("\n## Metadata\n")
     lines.append("| Field | Value |")
@@ -638,7 +641,7 @@ def format_issue_markdown(data: dict) -> str:
     if related:
         lines.append("\n## Related Issues\n")
         for rel, rkey in related:
-            rlink = f"{JIRA_BASE}/browse/{rkey}"
+            rlink = f"{base}/browse/{rkey}"
             lines.append(f"- **{rel}**: [{rkey}]({rlink})")
 
     return "\n".join(lines)

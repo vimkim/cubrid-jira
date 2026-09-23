@@ -69,8 +69,11 @@ def test_render_empty_result():
 def test_jql_output_json_is_single_line_raw_response(monkeypatch, capsys):
     captured = {}
 
-    def fake_search(jql, fields="", max_results=50, start_at=0):
-        captured["args"] = (jql, fields, max_results, start_at)
+    def fake_search(
+        jql, fields="", max_results=50, start_at=0,
+        *, server="http://jira.cubrid.org",
+    ):
+        captured["args"] = (jql, fields, max_results, start_at, server)
         return _SAMPLE
 
     monkeypatch.setattr(cli, "search_issues", fake_search)
@@ -162,6 +165,19 @@ def test_cmd_jql_json_keeps_fields_verbatim(fake_server):
     main(["jql", "project = CBRD", "--fields", "summary", "--output", "json"])
     url = fake_server.requests[-1].url
     assert "fields=summary&maxResults" in url
+
+
+def test_cmd_jql_uses_selected_server_for_request_and_links(fake_server, capsys):
+    fake_server.route("GET", "", response=_SAMPLE)
+
+    main([
+        "jql", "project = RND",
+        "--server", "http://jira.cubrid.com",
+    ])
+
+    out = capsys.readouterr().out
+    assert fake_server.requests[-1].url.startswith("http://jira.cubrid.com/")
+    assert "http://jira.cubrid.com/browse/CBRD-100" in out
 
 
 def test_cmd_jql_rejects_negative_max(capsys):

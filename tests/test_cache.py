@@ -2,7 +2,12 @@
 
 from pathlib import Path
 
-from cubrid_jira.cache import invalidate, resolve_attachment_dir, resolve_cache_dir
+from cubrid_jira.cache import (
+    invalidate,
+    resolve_attachment_dir,
+    resolve_cache_dir,
+    resolve_field_map_path,
+)
 
 
 def test_resolve_cli_arg_wins(monkeypatch, tmp_path):
@@ -15,6 +20,34 @@ def test_resolve_env_wins_over_default(monkeypatch, tmp_path):
     assert resolve_cache_dir(None) == tmp_path / "from-env"
 
 
+def test_alternate_server_cache_is_isolated_by_hostname(monkeypatch, tmp_path):
+    monkeypatch.setenv("CUBRID_JIRA_DIR", str(tmp_path))
+
+    assert resolve_cache_dir(None, server="http://jira.cubrid.org") == tmp_path
+    assert (
+        resolve_cache_dir(None, server="http://jira.cubrid.com/")
+        == tmp_path / "jira.cubrid.com"
+    )
+
+
+def test_default_server_cache_identity_is_case_insensitive(monkeypatch, tmp_path):
+    monkeypatch.setenv("CUBRID_JIRA_DIR", str(tmp_path))
+
+    assert (
+        resolve_cache_dir(None, server="http://JIRA.CUBRID.ORG/")
+        == tmp_path
+    )
+
+
+def test_alternate_server_field_map_uses_isolated_cache(monkeypatch, tmp_path):
+    monkeypatch.setenv("CUBRID_JIRA_DIR", str(tmp_path))
+
+    assert (
+        resolve_field_map_path(None, server="http://jira.cubrid.com")
+        == tmp_path / "jira.cubrid.com" / "field-map.json"
+    )
+
+
 def test_attachment_dir_cli_arg_wins(monkeypatch, tmp_path):
     monkeypatch.setenv("CUBRID_JIRA_DIR", str(tmp_path / "from-env"))
     got = resolve_attachment_dir("CBRD-1", str(tmp_path / "from-cli"))
@@ -25,6 +58,19 @@ def test_attachment_dir_env_wins_over_default(monkeypatch, tmp_path):
     monkeypatch.setenv("CUBRID_JIRA_DIR", str(tmp_path / "from-env"))
     got = resolve_attachment_dir("CBRD-1", None)
     assert got == tmp_path / "from-env" / "attachments" / "CBRD-1"
+
+
+def test_attachment_dir_isolates_alternate_server(monkeypatch, tmp_path):
+    monkeypatch.setenv("CUBRID_JIRA_DIR", str(tmp_path / "from-env"))
+
+    got = resolve_attachment_dir(
+        "RND-1", None, server="http://jira.cubrid.com"
+    )
+
+    assert (
+        got
+        == tmp_path / "from-env" / "attachments" / "jira.cubrid.com" / "RND-1"
+    )
 
 
 def test_attachment_dir_default(monkeypatch):

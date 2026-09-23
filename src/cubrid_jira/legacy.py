@@ -13,6 +13,7 @@ import sys
 
 from cubrid_jira.cache import DEFAULT_DIR
 from cubrid_jira.cli import cmd_search
+from cubrid_jira.server import DEFAULT_SERVER, select_server
 from cubrid_jira.walk import bulk_fetch_main
 
 
@@ -42,6 +43,11 @@ def search_main() -> None:
         "--no-recurse", action="store_true",
         help="Only fetch the given issue (no related issues)",
     )
+    parser.add_argument(
+        "--server",
+        default=None,
+        help=f"JIRA server base URL (default: {DEFAULT_SERVER}).",
+    )
     freshness = parser.add_mutually_exclusive_group()
     freshness.add_argument(
         "--force", action="store_true",
@@ -52,6 +58,10 @@ def search_main() -> None:
         help="Read cached markdown without contacting JIRA.",
     )
     args = parser.parse_args()
+    try:
+        args.server = select_server(args.issue, args.server)
+    except ValueError as e:
+        parser.error(str(e))
     cmd_search(args)
 
 
