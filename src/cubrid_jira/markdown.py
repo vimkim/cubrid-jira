@@ -31,13 +31,15 @@ MARKDOWN_INLINE_RE = re.compile(
 )
 MARKDOWN_FENCE_RE = re.compile(r"^\s*(```|~~~)")
 MARKDOWN_FENCE_OPEN_RE = re.compile(
-    r"^[ \t]*(?P<marker>`{3,}|~{3,})[^\r\n]*(?:\r?\n)?$"
+    r"^[ \t]*(?P<marker>`{3,}|~{3,})(?P<info>[^\r\n]*)(?:\r?\n)?$"
 )
 SIMPLE_TABLE_SEPARATOR_RE = re.compile(
     r"^[ \t]*-{2,}(?:[ \t]+-{2,})+[ \t]*$"
 )
 SIMPLE_TABLE_HEADER_RE = re.compile(r"\S[ \t]{2,}\S")
-JIRA_VERBATIM_RE = re.compile(r"^\s*\{(?:code|noformat)(?::[^}]*)?\}\s*$")
+JIRA_VERBATIM_RE = re.compile(
+    r"^\s*\{(?P<kind>code|noformat)(?::[^}]*)?\}\s*$"
+)
 JIRA_CODE_LANGUAGE_RE = re.compile(
     r"^(?P<indent>\s*)\{code:(?P<language>[^}|]+)"
     r"(?P<options>\|[^}]*)?\}(?P<trailing>\s*)$"
@@ -94,6 +96,19 @@ def _warn_pandoc_read_once(detail: str) -> None:
     )
 
 
+def _protect_jira_escaped_pipes(text: str) -> tuple[str, str]:
+    """Hide Jira pipe entities outside verbatim blocks from Pandoc."""
+    token = "CUBRIDJIRAESCAPEDPIPE"
+    while token in text:
+        token += "X"
+
+    protected = _fix_jira_lines_outside_verbatim_blocks(
+        text,
+        lambda line: line.replace("&#124;", token),
+    )
+    return protected, token
+
+
 def jira_to_markdown(text: str) -> str:
     """Convert Jira wiki markup to markdown via pandoc. Raw-markup fallback.
 
@@ -103,6 +118,8 @@ def jira_to_markdown(text: str) -> str:
     every issue as though it had no description — a silent, plausible-looking
     wrong answer rather than a visible failure.
     """
+    protected_text, escaped_pipe_token = _protect_jira_escaped_pipes(text)
+
     try:
         result = subprocess.run(
             [
@@ -110,7 +127,7 @@ def jira_to_markdown(text: str) -> str:
                 "-t", PANDOC_ROUND_TRIP_MARKDOWN_FORMAT,
                 "--wrap=none",
             ],
-            input=text,
+            input=protected_text,
             capture_output=True,
             text=True,
             timeout=10,
@@ -123,7 +140,7 @@ def jira_to_markdown(text: str) -> str:
         _warn_pandoc_read_once(stderr.splitlines()[0] if stderr else "")
         return text
 
-    return result.stdout.strip()
+    return result.stdout.replace(escaped_pipe_token, r"\|").strip()
 
 
 def _is_korean_char(ch: str) -> bool:
@@ -311,11 +328,38 @@ def _protect_escaped_pipes(text: str) -> tuple[str, str]:
     return "".join(result), token
 
 
-def _protect_fenced_code_contents(text: str) -> tuple[str, list[tuple[str, str]]]:
+def _normalize_jira_code_language(language: str) -> str:
+    language = language.strip().lower()
+    language = JIRA_CODE_LANGUAGE_ALIASES.get(language, language)
+    if language not in JIRA_CODE_LANGUAGES:
+        return "none"
+    return language
+
+
+def _markdown_fence_jira_language(info: str) -> str | None:
+    """Return the normalized Jira language encoded by a fence info string."""
+    info = info.strip()
+    if not info:
+        return None
+
+    if info.startswith("{"):
+        class_match = re.search(r"(?:^|[{ \t])\.([^\s}]+)", info)
+        if not class_match:
+            return None
+        language = class_match.group(1)
+    else:
+        language = info.split(maxsplit=1)[0]
+
+    return _normalize_jira_code_language(language)
+
+
+def _protect_fenced_code_contents(
+    text: str,
+) -> tuple[str, list[tuple[str, str, str | None]]]:
     """Replace closed fenced-code payloads with tokens Pandoc cannot alter."""
     lines = text.splitlines(keepends=True)
     result: list[str] = []
-    replacements: list[tuple[str, str]] = []
+    replacements: list[tuple[str, str, str | None]] = []
     line_index = 0
 
     while line_index < len(lines):
@@ -344,20 +388,52 @@ def _protect_fenced_code_contents(text: str) -> tuple[str, list[tuple[str, str]]
             token += "X"
         opener_newline = "\r\n" if lines[line_index].endswith("\r\n") else "\n"
         content = "".join(lines[line_index + 1:closing_index])
+        language = _markdown_fence_jira_language(opener.group("info"))
 
         result.append(lines[line_index])
         result.append(token + opener_newline)
         result.append(lines[closing_index])
-        replacements.append((token, content))
+        replacements.append((token, content, language))
         line_index = closing_index + 1
 
     return "".join(result), replacements
 
 
-def _restore_fenced_code_contents(
-    jira_text: str, replacements: list[tuple[str, str]]
+def _normalize_fenced_code_placeholders(
+    jira_text: str,
+    replacements: list[tuple[str, str, str | None]],
 ) -> str:
-    for token, content in replacements:
+    """Separate Pandoc placeholders and recover source fence languages."""
+    for token, _content, language in replacements:
+        block_re = re.compile(
+            r"(?P<open>\{(?:code(?::[^}\r\n]*)?|noformat)\}[ \t]*\r?\n)"
+            rf"{re.escape(token)}"
+            r"(?:\r?\n)?"
+            r"(?P<close>\{(?:code|noformat)\}[ \t]*(?:\r?\n|$))"
+        )
+        match = block_re.search(jira_text)
+        if match is None:
+            raise MarkdownConversionError(
+                "pandoc did not preserve a fenced code block placeholder"
+            )
+
+        if language is None:
+            opening = match.group("open")
+            closing = match.group("close")
+        else:
+            opening = f"{{code:{language}}}\n"
+            closing = "{code}\n"
+
+        normalized = opening + token + "\n" + closing
+        jira_text = jira_text[:match.start()] + normalized + jira_text[match.end():]
+
+    return jira_text
+
+
+def _restore_fenced_code_contents(
+    jira_text: str, replacements: list[tuple[str, str, str | None]]
+) -> str:
+    for token, content, _language in replacements:
         placeholder_line = token + "\n"
         if placeholder_line not in jira_text:
             raise MarkdownConversionError(
@@ -369,18 +445,24 @@ def _restore_fenced_code_contents(
 
 def _fix_jira_lines_outside_verbatim_blocks(text: str, fix_line) -> str:
     result: list[str] = []
-    in_verbatim = False
+    verbatim_kind: str | None = None
 
     for line in text.splitlines(keepends=True):
         content = line.rstrip("\r\n")
         newline = line[len(content):]
+        marker = JIRA_VERBATIM_RE.match(content)
 
-        if JIRA_VERBATIM_RE.match(content):
-            in_verbatim = not in_verbatim
+        if marker and verbatim_kind is None:
+            verbatim_kind = marker.group("kind")
             result.append(line)
             continue
 
-        if in_verbatim:
+        if marker and marker.group("kind") == verbatim_kind:
+            verbatim_kind = None
+            result.append(line)
+            continue
+
+        if verbatim_kind is not None:
             result.append(line)
         else:
             result.append(fix_line(content) + newline)
@@ -433,10 +515,7 @@ def normalize_jira_code_languages(text: str) -> str:
             result.append(line)
             continue
 
-        language = match.group("language").strip().lower()
-        language = JIRA_CODE_LANGUAGE_ALIASES.get(language, language)
-        if language not in JIRA_CODE_LANGUAGES:
-            language = "none"
+        language = _normalize_jira_code_language(match.group("language"))
 
         options = match.group("options") or ""
         result.append(
@@ -488,6 +567,7 @@ def markdown_to_jira_body(md_text: str) -> str:
     jira_text = md_to_jira(sanitize_markdown(spaced_markdown))
     jira_text = jira_text.replace(escaped_pipe_token, "&#124;")
     jira_text = normalize_jira_code_languages(jira_text)
+    jira_text = _normalize_fenced_code_placeholders(jira_text, code_replacements)
     jira_text = fix_jira_bold_code_nesting(jira_text)
     jira_text = normalize_korean_jira_spacing(jira_text)
     return _restore_fenced_code_contents(jira_text, code_replacements)

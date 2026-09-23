@@ -41,6 +41,27 @@ def test_markdown_to_jira_body_sanitizes_and_postprocesses(monkeypatch):
     assert "*foo* {{bar}} *baz*" in body
 
 
+def test_markdown_to_jira_body_restores_abutting_noformat_placeholder(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        markdown,
+        "md_to_jira",
+        lambda _text: "{noformat}\nCUBRIDJIRACODEBLOCK0{noformat}\n",
+    )
+
+    body = markdown.markdown_to_jira_body("```cpp\nbody\n```\n")
+
+    assert body == "{code:cpp}\nbody\n{code}\n"
+
+
+@pytest.mark.skipif(not PANDOC_HAS_JIRA, reason="pandoc lacks Jira formats")
+def test_markdown_to_jira_body_recovers_canonical_fence_language():
+    body = markdown.markdown_to_jira_body("```{.cpp}\nbody\n```\n")
+
+    assert body == "{code:cpp}\nbody\n{code}\n"
+
+
 @pytest.mark.parametrize(
     ("markdown_language", "jira_language"),
     [
@@ -122,6 +143,54 @@ def test_jira_to_markdown_converts_when_pandoc_succeeds(monkeypatch):
         "--wrap=none",
     ]
     assert captured["input"] == "h2. Title\n"
+
+
+def test_jira_to_markdown_restores_escaped_pipes_outside_verbatim(
+    monkeypatch,
+):
+    captured = {}
+
+    def fake_run(cmd, input, capture_output, text, timeout):
+        captured["input"] = input
+        return SimpleNamespace(
+            returncode=0,
+            stdout=(
+                "| A | B |\n"
+                "|---|---|\n"
+                "| x | left CUBRIDJIRAESCAPEDPIPE right |\n\n"
+                "    &#124;\n"
+            ),
+            stderr="",
+        )
+
+    monkeypatch.setattr(markdown.subprocess, "run", fake_run)
+
+    body = markdown.jira_to_markdown(
+        "||A||B||\n"
+        "|x|left &#124; right|\n\n"
+        "{noformat}\n"
+        "&#124;\n"
+        "{noformat}\n"
+    )
+
+    assert "left CUBRIDJIRAESCAPEDPIPE right" in captured["input"]
+    assert "{noformat}\n&#124;\n{noformat}" in captured["input"]
+    assert "left \\| right" in body
+    assert "    &#124;" in body
+
+
+@pytest.mark.skipif(not PANDOC_HAS_JIRA, reason="pandoc lacks Jira formats")
+def test_jira_to_markdown_preserves_pipe_entity_after_literal_code_marker():
+    body = markdown.jira_to_markdown(
+        "{noformat}\n"
+        "{code}\n"
+        "&#124;\n"
+        "{code}\n"
+        "{noformat}\n"
+    )
+
+    assert "&#124;" in body
+    assert r"\|" not in body
 
 
 @pytest.mark.skipif(not PANDOC_HAS_JIRA, reason="pandoc lacks Jira formats")
