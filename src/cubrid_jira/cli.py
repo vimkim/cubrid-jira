@@ -1383,7 +1383,10 @@ def _add_write_globals(p: argparse.ArgumentParser) -> None:
     p.add_argument(
         "--server",
         default=DEFAULT_SERVER,
-        help=f"JIRA server base URL (default: {DEFAULT_SERVER}).",
+        help=(
+            f"JIRA server base URL (default: {DEFAULT_SERVER}); "
+            "use http://jira.cubrid.com for RND issues."
+        ),
     )
     p.add_argument(
         "-d", "--dir",
@@ -1419,7 +1422,9 @@ def _build_parser() -> argparse.ArgumentParser:
         prog="cubrid-jira",
         description=(
             "Read + write CUBRID JIRA issues. Write commands are dry-run by "
-            "default; pass --yes to actually send."
+            "default; pass --yes to actually send. The default server is "
+            "jira.cubrid.org; server-aware commands can target "
+            "jira.cubrid.com with --server."
         ),
     )
     sub = parser.add_subparsers(dest="cmd", required=True, metavar="SUBCOMMAND")

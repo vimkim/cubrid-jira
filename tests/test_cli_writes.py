@@ -23,6 +23,15 @@ def _identity_markdown_conversion(monkeypatch):
     monkeypatch.setattr("cubrid_jira.cli.markdown_to_jira_body", lambda text: text)
 
 
+def test_comment_help_explains_rnd_server_selection(capsys):
+    with pytest.raises(SystemExit) as exc:
+        main(["comment", "--help"])
+
+    assert exc.value.code == 0
+    help_text = " ".join(capsys.readouterr().out.split())
+    assert "use http://jira.cubrid.com for RND issues" in help_text
+
+
 # --------------------------------------------------------------------------- #
 # create
 # --------------------------------------------------------------------------- #

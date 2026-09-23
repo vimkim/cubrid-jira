@@ -1,6 +1,6 @@
 # cubrid-jira
 
-A CUBRID JIRA CLI for `http://jira.cubrid.org` with three workflow buckets:
+A CUBRID JIRA CLI that defaults to `http://jira.cubrid.org` with three workflow buckets:
 
 * **live-first reads** (`search`) — one issue by key, markdown to stdout, cache updated on every normal read.
 * **JQL list search** (`jql`) — list issues matching a JQL query as a markdown table (or `--output json`); read-only, no credentials.
@@ -40,6 +40,36 @@ Exit codes          : 0 ok | 1 generic | 2 401 | 3 403 | 4 404 | 5 400
 
 `cubrid-jira search CBRD-XXXXX` is the agent-friendly read; use it freely.
 Any write subcommand without `--yes` is **safe to invoke** — it only prints the planned request.
+
+### Choosing between `jira.cubrid.org` and `jira.cubrid.com`
+
+The two hostnames are separate JIRA installations; the CLI does not infer the
+server from an issue-key prefix.
+
+| Target | Command form |
+|---|---|
+| `jira.cubrid.org` (default; for example, `CBRD-*`) | Omit `--server`. |
+| `jira.cubrid.com` (for example, `RND-*`) | On commands that expose the flag, add `--server http://jira.cubrid.com`. |
+
+For example, to add and then verify a comment on an RND issue:
+
+```sh
+cubrid-jira comment RND-2851 --body-file comment.md \
+  --server http://jira.cubrid.com --yes
+cubrid-jira comment-list RND-2851 \
+  --server http://jira.cubrid.com --limit 1
+```
+
+`search`, `jql`, and `attachment` are currently fixed to
+`http://jira.cubrid.org` and do not expose `--server`. In particular, passing a
+full `.com` browse URL to `search` does **not** select `.com`; the command extracts
+the issue key and still queries `.org`. Use a server-aware command such as
+`comment-list` when it fits the task, or use the `.com` REST API directly until
+server selection is added to those read commands.
+
+Credentials are resolved for the selected hostname. If credentials differ,
+add separate `machine jira.cubrid.org` and `machine jira.cubrid.com` entries to
+`~/.netrc`, or set `CUBRID_JIRA_USER` and `CUBRID_JIRA_PASSWORD` for the command.
 
 ---
 
@@ -232,7 +262,7 @@ Global flags on every write subcommand:
 |---|---|---|
 | `--dry-run` | (always on unless `--yes`) | Print the resolved URL, masked headers, and JSON body. Don't send. |
 | `--yes` | off | Required to actually perform the live write. |
-| `--server URL` | `http://jira.cubrid.org` | JIRA base URL. |
+| `--server URL` | `http://jira.cubrid.org` | JIRA base URL; use `http://jira.cubrid.com` for RND issues. |
 | `-d`, `--dir DIR` | shared cache | Cache directory for post-write cache updates. |
 | `--output {text,json}` | `text` | Machine-readable output mode; see below. |
 

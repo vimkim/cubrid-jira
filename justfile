@@ -1,5 +1,8 @@
 # cubrid-jira justfile
 
+# Manually runnable server examples live in their own command namespace.
+mod example 'example.just'
+
 default:
     @just --list
 
