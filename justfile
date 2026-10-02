@@ -12,6 +12,12 @@ default:
 install:
     uv sync --dev
 
+# Repair stale install paths after moving this checkout: just repair-install.
+# Repoints the global editable tool to this checkout and refreshes local launchers.
+repair-install:
+    uv tool install --force --editable "$PWD"
+    uv sync --dev --reinstall
+
 # Run the unit + mocked-integration tests (live tests skipped).
 test:
     uv run pytest
