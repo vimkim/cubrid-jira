@@ -520,9 +520,27 @@ uv run cubrid-jira search CBRD-1
 With `just`:
 
 ```sh
-just test
-just search CBRD-26463
+just                         # list commands
+just setup                   # local development environment only
+just install                 # setup + global editable command linked to this checkout
+just install-copy            # independent global copy; rerun after source changes
+just repair-install          # refresh local/global editable paths after moving the checkout
+just doctor                  # inspect local paths and check the global command starts
+just check                   # non-live tests + local CLI startup check
+just test -k server          # pass options to pytest
+just test-live               # explicitly run live read-only tests
+just search CBRD-26463 --no-recurse
+just search-cached CBRD-26463
+just jql 'project = CBRD ORDER BY updated DESC' --max 10
+just attachments CBRD-26463  # list metadata only
+just run --help              # pass any arguments to the local CLI
 ```
+
+`install` and `repair-install` point the global command at the checkout where
+you run them. After moving that checkout, run `just repair-install` from its new
+location. `install-copy` instead installs a separate copy that survives checkout
+moves. The `write-dry-*` recipes only preview requests; `run` preserves the CLI's
+dry-run default and sends writes only when you explicitly include `--yes`.
 
 ### Module layout (`src/cubrid_jira/`)
 
