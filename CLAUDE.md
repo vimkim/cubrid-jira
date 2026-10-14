@@ -82,3 +82,17 @@ The legacy import path `cubrid_jira_fetcher` re-exports `cubrid_jira` and emits 
 uv run pytest              # unit + mocked integration (~0.2s)
 uv run pytest -m live      # also hits the real jira.cubrid.org (read-only)
 ```
+
+## Agent skills
+
+### Issue tracker
+
+Track CLI development issues and specs in GitHub Issues for `vimkim/cubrid-jira`. Before creating or fetching tickets, read `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Before assigning triage roles or publishing agent-ready tickets, read `docs/agents/triage-labels.md` for the label mapping.
+
+### Domain docs
+
+Use a single domain context: root `GLOSSARY.md` and `docs/adr/`. Before exploring code, read `docs/agents/domain.md` for document and vocabulary rules.
