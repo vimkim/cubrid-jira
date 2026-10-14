@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -100,6 +101,7 @@ def build_create_payload(
     issue_type: str,
     summary: str,
     *,
+    parent: str | None = None,
     description: str | None = None,
     priority: str | None = None,
     assignee: str | None = None,
@@ -112,6 +114,8 @@ def build_create_payload(
         "summary": summary,
         "issuetype": {"name": issue_type},
     }
+    if parent is not None:
+        fields["parent"] = {"key": parent}
     if priority:
         fields["priority"] = {"name": priority}
     if description is not None:
@@ -565,6 +569,15 @@ def cmd_attachment(args) -> None:
 # --------------------------------------------------------------------------- #
 
 def cmd_create(args) -> None:
+    if args.type.casefold() == "sub-task" and args.parent is None:
+        print("Error: --type Sub-task requires --parent KEY, e.g. --parent CBRD-27193.",
+              file=sys.stderr)
+        sys.exit(1)
+    if args.parent is not None and not re.fullmatch(r"[A-Z][A-Z0-9_]*-[0-9]+", args.parent):
+        print(f"Error: --parent must be an issue key, e.g. CBRD-27193; got {args.parent!r}.",
+              file=sys.stderr)
+        sys.exit(1)
+
     description = None
     if args.description_file:
         description = _read_and_render_jira_body(
@@ -579,10 +592,17 @@ def cmd_create(args) -> None:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
 
+    if (args.parent is not None and "parent" in custom
+            and custom["parent"] != {"key": args.parent}):
+        print("Error: --field Parent conflicts with --parent; "
+              "set the parent with --parent KEY only.", file=sys.stderr)
+        sys.exit(1)
+
     payload = build_create_payload(
         project=args.project,
         issue_type=args.type,
         summary=args.summary,
+        parent=args.parent,
         description=description,
         priority=args.priority,
         assignee=args.assignee,
@@ -593,6 +613,8 @@ def cmd_create(args) -> None:
 
     resp = client.request("POST", "/rest/api/2/issue", body=payload)
     new_key = (resp or {}).get("key")
+    if args.parent is not None and not _is_dry_run(args):
+        invalidate(args.parent, resolve_cache_dir(args.dir, server=args.server))
 
     link_specs: list[tuple[str, str]] = []
     for k in args.link_relates or []:
@@ -1364,7 +1386,7 @@ def _add_field_flag(p: argparse.ArgumentParser) -> None:
     populated by a one-time ``GET /rest/api/2/field`` and refreshed on
     cache miss. Repeat ``--field`` to set multiple fields:
 
-      cubrid-jira create ... --field "QA Scenario=N/A" \
+      cubrid-jira create ... --field 'QA Scenario={"value":"Required"}' \
                              --field customfield_210566=...
     """
     p.add_argument(
@@ -1377,8 +1399,9 @@ def _add_field_flag(p: argparse.ArgumentParser) -> None:
             'Set an arbitrary JIRA field. FIELD is a custom-field id '
             '(e.g. customfield_210565) or display name (e.g. "QA Scenario"); '
             'names are resolved via /rest/api/2/field and cached on disk. '
-            'Repeat for multiple fields. Example: '
-            '--field "QA Scenario=Not applicable; analysis ticket".'
+            'Repeat for multiple fields. Use JSON objects/arrays for select '
+            'fields and bare strings for text fields. Example: '
+            '--field \'QA Scenario={"value":"Required"}\'.'
         ),
     )
 
@@ -1544,6 +1567,8 @@ def _build_parser() -> argparse.ArgumentParser:
     p_create = sub.add_parser("create", help="Create a new issue.")
     p_create.add_argument("--project", required=True, help="Project key, e.g. CBRD.")
     p_create.add_argument("--type", required=True, help="Issue type, e.g. Bug, Task.")
+    p_create.add_argument("--parent", metavar="KEY",
+                          help="Parent issue key, e.g. CBRD-27193; required for --type Sub-task.")
     p_create.add_argument("--summary", required=True, help="Issue summary (title).")
     p_create.add_argument("--description-file", metavar="PATH",
                           help="Markdown file for the issue description; "

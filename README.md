@@ -210,6 +210,7 @@ cubrid-jira create --project CBRD --type Bug --summary "..." --yes
 
 ```sh
 cubrid-jira create     --project CBRD --type Bug --summary "..." \
+                       [--parent KEY] \
                        [--description-file path] [--priority Major] [--assignee user] \
                        [--label l1 --label l2] [--component sql] \
                        [--link-relates CBRD-Y] [--link-blocks CBRD-Z] \
@@ -227,6 +228,12 @@ cubrid-jira update     CBRD-A [--summary "..."] [--description-file path] \
                        [--field "QA Scenario={\"value\":\"Complete\"}"] [--field customfield_NNN=...] \
                        [--from {markdown,jira}]
 ```
+
+`create --type Sub-task` requires `--parent KEY` (for example, `CBRD-27193`).
+The parent is sent as the standard `parent` field without a field-name lookup.
+Malformed or missing parent keys are rejected before any request is sent.
+If `--field` also resolves to `parent`, its value must match `--parent`;
+conflicting parents are rejected before creation.
 
 `update` edits an existing issue's fields. At least one of `--summary`, `--description-file`, `--priority`, `--label`, `--component`, or `--field` is required. **`--label` and `--component` replace the full list** — they are not additive (Jira REST `fields` semantics). `--description-file -` reads from stdin.
 
@@ -280,7 +287,7 @@ Body input flag on `create`, `comment`, `comment-update`, and `update`:
 
 ### Cache interaction on writes
 
-- `create` (live): the new issue is fetched and saved into the cache, so `cubrid-jira search NEW-KEY` is an immediate hit.
+- `create` (live): the new issue is fetched and saved into the cache. With `--parent`, the parent's cached files are deleted so its subtask list is refreshed on the next read.
 - `comment`, `comment-update`, `comment-delete`, `link`, `transition`, `assign`, `update` (live): cached markdown for the affected issue key(s) is **deleted**, so the next read re-fetches. `link` invalidates both sides. `comment-list` is read-only and never invalidates.
 
 ---
@@ -440,6 +447,23 @@ KEY=$(cubrid-jira create \
 echo "Created $KEY"
 cubrid-jira search "$KEY"   # re-fetches live and refreshes the cache
 ```
+
+### Create a subtask
+
+```sh
+cubrid-jira create \
+    --project CBRD \
+    --type Sub-task \
+    --parent CBRD-27193 \
+    --summary "Investigate page-buffer ownership" \
+    --field 'QA Scenario={"value":"Required"}' \
+    --output json
+```
+
+The default dry-run prints one JSON request plan. Add `--yes` to create the
+subtask and return its new key in the JSON result. QA Scenario is a single-select
+field and requires a JSON option object; use an allowed value from the project's
+create metadata as described above.
 
 ### Revise the description of an existing issue
 

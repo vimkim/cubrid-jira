@@ -13,7 +13,7 @@ import json
 import pytest
 
 import cubrid_jira.markdown as markdown
-from conftest import PANDOC_HAS_JIRA
+from conftest import PANDOC_HAS_JIRA, make_http_error
 from cubrid_jira.cli import main
 from cubrid_jira.markdown import MarkdownConversionError
 
@@ -30,6 +30,18 @@ def test_comment_help_explains_rnd_server_selection(capsys):
     assert exc.value.code == 0
     help_text = " ".join(capsys.readouterr().out.split())
     assert "use http://jira.cubrid.com for RND issues" in help_text
+
+
+@pytest.mark.parametrize("command", ["create", "update"])
+def test_field_help_shows_json_single_select_example(command, capsys):
+    with pytest.raises(SystemExit) as exc:
+        main([command, "--help"])
+
+    assert exc.value.code == 0
+    help_text = " ".join(capsys.readouterr().out.split())
+    assert '--field \'QA Scenario={"value":"Required"}\'' in help_text
+    assert "JSON" in help_text
+    assert "Not applicable; analysis ticket" not in help_text
 
 
 # --------------------------------------------------------------------------- #
@@ -57,6 +69,199 @@ def test_create_dry_run_does_not_send(fake_server, tmp_path, capsys, monkeypatch
             "priority": {"name": "Major"},
         }
     }
+
+
+@pytest.mark.parametrize("write_flags", [[], ["--yes", "--dry-run"]])
+def test_create_subtask_dry_run_records_parent_without_field_lookup(
+    fake_server, tmp_path, capsys, monkeypatch, write_flags
+):
+    monkeypatch.setenv("CUBRID_JIRA_DIR", str(tmp_path))
+    parent_cache = tmp_path / "CBRD-27193.md"
+    parent_cache.write_text("cached parent")
+
+    main([
+        "create", "--project", "CBRD", "--type", "Sub-task",
+        "--parent", "CBRD-27193", "--summary", "CLI parent dry-run reproduction",
+        "--output", "json", *write_flags,
+    ])
+
+    assert json.loads(capsys.readouterr().out) == {
+        "dry_run": True,
+        "requests": [{
+            "method": "POST",
+            "url": "http://jira.cubrid.org/rest/api/2/issue",
+            "body": {"fields": {
+                "project": {"key": "CBRD"},
+                "issuetype": {"name": "Sub-task"},
+                "summary": "CLI parent dry-run reproduction",
+                "parent": {"key": "CBRD-27193"},
+            }},
+        }],
+    }
+    assert fake_server.requests == []
+    assert parent_cache.read_text() == "cached parent"
+
+
+@pytest.mark.parametrize("write_flags", [[], ["--yes"]])
+@pytest.mark.parametrize("parent_args", [
+    [], ["--parent", ""], ["--parent", "bad-key"],
+    ["--parent", "CBRD-27193junk"], ["--parent", '{"key":"CBRD-27193"}'],
+])
+def test_create_subtask_requires_valid_parent_before_any_request(
+    fake_server, tmp_path, capsys, monkeypatch, parent_args, write_flags
+):
+    monkeypatch.setenv("CUBRID_JIRA_DIR", str(tmp_path))
+    with pytest.raises(SystemExit) as exc:
+        main([
+            "create", "--project", "CBRD", "--type", "Sub-task",
+            "--summary", "x", "--field", 'QA Scenario={"value":"Required"}',
+            "--output", "json", *parent_args, *write_flags,
+        ])
+
+    assert exc.value.code == 1
+    out = capsys.readouterr()
+    assert out.out == ""
+    assert "--parent" in out.err
+    assert "CBRD-27193" in out.err
+    assert fake_server.requests == []
+
+
+@pytest.mark.parametrize("write_flags", [[], ["--yes"]])
+def test_create_subtask_rejects_conflicting_field_parent_without_mutation(
+    fake_server, tmp_path, capsys, monkeypatch, write_flags
+):
+    monkeypatch.setenv("CUBRID_JIRA_DIR", str(tmp_path))
+    (tmp_path / "CBRD-1.md").write_text("first parent")
+    (tmp_path / "CBRD-2.md").write_text("second parent")
+    fake_server.route("GET", "/rest/api/2/field", response=[{
+        "id": "parent", "name": "Parent", "custom": False,
+    }])
+
+    with pytest.raises(SystemExit) as exc:
+        main([
+            "create", "--project", "CBRD", "--type", "Sub-task",
+            "--parent", "CBRD-1", "--summary", "x",
+            "--field", 'Parent={"key":"CBRD-2"}', "--output", "json", *write_flags,
+        ])
+
+    assert exc.value.code == 1
+    out = capsys.readouterr()
+    assert out.out == ""
+    assert "--parent" in out.err and "--field" in out.err
+    assert "conflict" in out.err.lower()
+    assert [r.method for r in fake_server.requests] == ["GET"]
+    assert (tmp_path / "CBRD-1.md").read_text() == "first parent"
+    assert (tmp_path / "CBRD-2.md").read_text() == "second parent"
+
+
+def test_create_subtask_live_posts_parent_and_invalidates_selected_server_cache(
+    fake_server, tmp_path, capsys, monkeypatch
+):
+    monkeypatch.setenv("CUBRID_JIRA_DIR", str(tmp_path))
+    server_cache = tmp_path / "jira.cubrid.com"
+    server_cache.mkdir()
+    parent_cache = server_cache / "RND-27193.md"
+    parent_cache.write_text("stale children")
+    (server_cache / "RND-27193-old.json").write_text("{}")
+    (server_cache / "RND-271930.md").write_text("unrelated issue")
+    (tmp_path / "RND-27193.md").write_text("other server parent")
+    fake_server.route("GET", "/rest/api/2/field", response=[{
+        "id": "customfield_210565", "name": "QA Scenario", "custom": True,
+    }])
+    fake_server.route("POST", "/rest/api/2/issue", response={
+        "id": "999", "key": "RND-999",
+        "self": "http://jira.cubrid.com/rest/api/2/issue/999",
+    })
+    fake_server.route(
+        "GET", "/rest/api/2/issue/RND-999?expand=renderedFields",
+        response={"key": "RND-999", "fields": {
+            "summary": "child", "parent": {"key": "RND-27193"},
+        }},
+    )
+
+    argv = [
+        "create", "--project", "RND", "--type", "Sub-task",
+        "--parent", "RND-27193", "--summary", "child",
+        "--field", 'QA Scenario={"value":"Required"}',
+        "--server", "http://jira.cubrid.com", "--output", "json",
+    ]
+    main(argv)
+    plan = json.loads(capsys.readouterr().out)
+    assert parent_cache.read_text() == "stale children"
+
+    main([*argv, "--yes"])
+    result = json.loads(capsys.readouterr().out)
+    post = next(r for r in fake_server.requests if r.method == "POST")
+    fields = json.loads(post.body)["fields"]
+    assert fields == plan["requests"][0]["body"]["fields"]
+    assert fields["parent"] == {"key": "RND-27193"}
+    assert fields["issuetype"] == {"name": "Sub-task"}
+    assert fields["customfield_210565"] == {"value": "Required"}
+    assert result == {
+        "key": "RND-999", "id": "999",
+        "self": "http://jira.cubrid.com/rest/api/2/issue/999",
+        "url": "http://jira.cubrid.com/browse/RND-999",
+    }
+    assert all(r.url.startswith("http://jira.cubrid.com/") for r in fake_server.requests)
+    assert len([r for r in fake_server.requests if r.url.endswith("/field")]) == 1
+    assert (server_cache / "RND-999.md").exists()
+    assert not parent_cache.exists()
+    assert not (server_cache / "RND-27193-old.json").exists()
+    assert (server_cache / "RND-271930.md").read_text() == "unrelated issue"
+    assert (tmp_path / "RND-27193.md").read_text() == "other server parent"
+
+
+def test_create_subtask_rejected_post_keeps_parent_cache(
+    fake_server, tmp_path, capsys, monkeypatch
+):
+    monkeypatch.setenv("CUBRID_JIRA_DIR", str(tmp_path))
+    parent_cache = tmp_path / "CBRD-27193.md"
+    parent_cache.write_text("cached parent")
+    fake_server.route("POST", "/rest/api/2/issue", raise_=make_http_error(400))
+
+    with pytest.raises(SystemExit) as exc:
+        main([
+            "create", "--project", "CBRD", "--type", "Sub-task",
+            "--parent", "CBRD-27193", "--summary", "x", "--yes", "--output", "json",
+        ])
+
+    assert exc.value.code == 5
+    assert capsys.readouterr().out == ""
+    assert parent_cache.read_text() == "cached parent"
+    assert len(fake_server.requests) == 1
+
+
+@pytest.mark.parametrize("failure", ["missing-key", "refresh", "link"])
+def test_create_subtask_success_invalidates_parent_despite_followup_failure(
+    fake_server, tmp_path, capsys, monkeypatch, failure
+):
+    monkeypatch.setenv("CUBRID_JIRA_DIR", str(tmp_path))
+    parent_cache = tmp_path / "CBRD-27193.md"
+    parent_cache.write_text("stale children")
+    response = {} if failure == "missing-key" else {"key": "CBRD-999"}
+    fake_server.route("POST", "/rest/api/2/issue", response=response)
+    argv = [
+        "create", "--project", "CBRD", "--type", "Sub-task",
+        "--parent", "CBRD-27193", "--summary", "x", "--yes", "--output", "json",
+    ]
+    if failure == "link":
+        fake_server.route("POST", "/rest/api/2/issueLink", raise_=make_http_error(400))
+        with pytest.raises(SystemExit) as exc:
+            main([*argv, "--link-relates", "CBRD-1"])
+        assert exc.value.code == 5
+    else:
+        if failure == "refresh":
+            fake_server.route(
+                "GET", "/rest/api/2/issue/CBRD-999?expand=renderedFields",
+                raise_=make_http_error(500),
+            )
+        main(argv)
+        result = json.loads(capsys.readouterr().out)
+        if failure == "refresh":
+            assert result["key"] == "CBRD-999"
+            assert len(fake_server.requests) == 2
+
+    assert not parent_cache.exists()
 
 
 def test_create_live_posts_and_caches(fake_server, tmp_path, monkeypatch):
