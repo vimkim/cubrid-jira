@@ -100,6 +100,12 @@ Installs four binaries on `$PATH`:
 | `cubrid-jira-search` | deprecated alias for `cubrid-jira search` |
 | `cubrid-jira-fetch` | deprecated bulk-fetch tool — the original CLI before the v1.0 rename |
 
+Refresh all installed commands from a local checkout with `just sync`. This
+installs an independent copy through `uv`, then checks that `cubrid-jira` and
+`cubrid-jira-kanban` start successfully. The personal `daily-update-cubrid`
+runner includes `~/gh/cubrid-jira` by default and invokes this recipe.
+It uses current local source; update the checkout separately when needed.
+
 > Do **not** use `pip install -e .` to install — that mode is only for editing this repo's source.
 
 ## Prerequisites

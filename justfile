@@ -9,6 +9,12 @@ default:
 
 # ---- installation ---------------------------------------------------------- #
 
+# Refresh all user commands from local source for daily-update-cubrid.
+sync:
+    uv tool install --reinstall .
+    @"$(uv tool dir --bin)/cubrid-jira" --help >/dev/null
+    @"$(uv tool dir --bin)/cubrid-jira-kanban" --help >/dev/null
+
 # Prepare the local development environment without changing the global command.
 setup:
     uv sync --dev
