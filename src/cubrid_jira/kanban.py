@@ -129,7 +129,7 @@ def _positive_int(value: str) -> int:
 
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
-        prog="cubrid-jira-my-kanban",
+        prog="cubrid-jira-kanban",
         description="List all tickets assigned to you, grouped by status; exclude Closed and Resolved.",
     )
     parser.add_argument("--server", default=DEFAULT_SERVER, help=f"JIRA server (default: {DEFAULT_SERVER}).")

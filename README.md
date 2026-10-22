@@ -96,7 +96,7 @@ Installs four binaries on `$PATH`:
 | Binary | Status |
 |---|---|
 | `cubrid-jira` | **canonical** — use this |
-| `cubrid-jira-my-kanban` | personal active tickets, grouped by status |
+| `cubrid-jira-kanban` | personal active tickets, grouped by status |
 | `cubrid-jira-search` | deprecated alias for `cubrid-jira search` |
 | `cubrid-jira-fetch` | deprecated bulk-fetch tool — the original CLI before the v1.0 rename |
 
@@ -196,17 +196,17 @@ cubrid-jira jql "project = RND" --server http://jira.cubrid.com
 - **`json`** prints the server's response verbatim on one line — pipe into `jq` or hand to an agent.
 - A malformed JQL is a server-side HTTP 400 → exits **5** (per the exit-code contract), not zero hits.
 
-## Personal active tickets — `cubrid-jira-my-kanban`
+## Personal active tickets — `cubrid-jira-kanban`
 
 Show every ticket assigned to your authenticated account, excluding `Closed`
 and `Resolved`. This read-only command uses the existing credentials (environment
 variables or `~/.netrc`) and fetches all result pages automatically.
 
 ```sh
-cubrid-jira-my-kanban
-cubrid-jira-my-kanban --output markdown > my-active-tickets.md
-cubrid-jira-my-kanban --output json | jq '.groups[] | {status, count}'
-cubrid-jira-my-kanban --server http://jira.cubrid.com
+cubrid-jira-kanban
+cubrid-jira-kanban --output markdown > my-active-tickets.md
+cubrid-jira-kanban --output json | jq '.groups[] | {status, count}'
+cubrid-jira-kanban --server http://jira.cubrid.com
 ```
 
 The default terminal view shows a summary count and a table for each nonempty

@@ -8,7 +8,7 @@ dependencies = ["rich>=14.0"]
 
 [project.scripts]
 cubrid-jira = "cubrid_jira.cli:main"
-cubrid-jira-my-kanban = "cubrid_jira.kanban:main"
+cubrid-jira-kanban = "cubrid_jira.kanban:main"
 cubrid-jira-fetch = "cubrid_jira.legacy:fetch_main"
 cubrid-jira-search = "cubrid_jira.legacy:search_main"
 
