@@ -648,6 +648,34 @@ def format_search_results_markdown(
     return "\n".join(lines)
 
 
+def format_kanban_markdown(
+    groups: list[tuple[str, list[dict]]], *, server: str = DEFAULT_SERVER,
+) -> str:
+    """Render status groups with counts and compact linked ticket tables."""
+    total = sum(len(issues) for _, issues in groups)
+    lines = [f"# My active JIRA tickets ({total})"]
+    if not groups:
+        return lines[0] + "\n\nNo active tickets assigned to you."
+
+    base = normalize_server(server)
+    for status, issues in groups:
+        lines.extend([
+            "", f"## {_md_cell(status)} ({len(issues)})", "",
+            "| Key | Type | Updated | Summary |",
+            "|---|---|---|---|",
+        ])
+        for issue in issues:
+            key = issue["key"]
+            fields = issue.get("fields", {})
+            issue_type = _md_cell((fields.get("issuetype") or {}).get("name", "?"))
+            updated = _md_cell((fields.get("updated") or "")[:10])
+            summary = _md_cell(fields.get("summary") or "")
+            lines.append(
+                f"| [{key}]({base}/browse/{key}) | {issue_type} | {updated} | {summary} |"
+            )
+    return "\n".join(lines)
+
+
 def format_issue_markdown(data: dict, *, server: str = DEFAULT_SERVER) -> str:
     """Format an issue dict as a human-readable markdown document."""
     if not data:

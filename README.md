@@ -91,11 +91,12 @@ pipx install git+https://github.com/vimkim/cubrid-jira.git
 cd cubrid-jira && uv tool install . || pipx install .
 ```
 
-Installs three binaries on `$PATH`:
+Installs four binaries on `$PATH`:
 
 | Binary | Status |
 |---|---|
 | `cubrid-jira` | **canonical** — use this |
+| `cubrid-jira-my-kanban` | personal active tickets, grouped by status |
 | `cubrid-jira-search` | deprecated alias for `cubrid-jira search` |
 | `cubrid-jira-fetch` | deprecated bulk-fetch tool — the original CLI before the v1.0 rename |
 
@@ -194,6 +195,42 @@ cubrid-jira jql "project = RND" --server http://jira.cubrid.com
 - **`text`** prints a markdown table: key (linked) · status · type · assignee · updated · summary, headed by `N of TOTAL matching issues`. Cell values are escaped so pipes/newlines can't corrupt the table.
 - **`json`** prints the server's response verbatim on one line — pipe into `jq` or hand to an agent.
 - A malformed JQL is a server-side HTTP 400 → exits **5** (per the exit-code contract), not zero hits.
+
+## Personal active tickets — `cubrid-jira-my-kanban`
+
+Show every ticket assigned to your authenticated account, excluding `Closed`
+and `Resolved`. This read-only command uses the existing credentials (environment
+variables or `~/.netrc`) and fetches all result pages automatically.
+
+```sh
+cubrid-jira-my-kanban
+cubrid-jira-my-kanban --output markdown > my-active-tickets.md
+cubrid-jira-my-kanban --output json | jq '.groups[] | {status, count}'
+cubrid-jira-my-kanban --server http://jira.cubrid.com
+```
+
+The default terminal view shows a summary count and a table for each nonempty
+status: `Open`, `Reopened`, `Confirmed`, `Develop`, `Test`, then `Handover`.
+Other statuses follow alphabetically. Tickets stay newest-updated first within
+each group. Tables wrap long summaries, including Korean text. Ticket keys are
+clickable in terminals that support hyperlinks. Below 100 terminal columns,
+the type column is hidden to leave more room for summaries. Colors are
+automatic; use `--no-color` to disable them.
+
+`--output markdown` produces status headings and linked tables. `--output json`
+prints one object with `total` and a `groups` array; each group has `status`,
+`count`, and the original `issues`. No formatted progress is written to stdout.
+
+`--page-size N` sets the request size (default: 100), not a result limit. If JIRA
+caps a page, the next offset uses the actual number returned. A failed request,
+duplicate ticket, changed total, or prematurely empty page exits nonzero without
+printing a partial board. The existing HTTP error exit codes also apply here.
+
+Install or update it with the package:
+
+```sh
+uv tool install --force git+https://github.com/vimkim/cubrid-jira.git
+```
 
 ## Field-write flow — `create / comment / comment-list / comment-update / comment-delete / link / transition / assign / update`
 
