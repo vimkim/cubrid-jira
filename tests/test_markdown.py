@@ -300,3 +300,28 @@ def test_jira_to_markdown_falls_back_when_pandoc_is_missing(monkeypatch):
     monkeypatch.setattr(markdown.subprocess, "run", fail)
 
     assert markdown.jira_to_markdown("h2. Title\n") == "h2. Title\n"
+
+
+@pytest.mark.skipif(not PANDOC_HAS_JIRA, reason="pandoc lacks Jira formats")
+def test_fenced_code_with_jira_closing_marker_preserves_source():
+    body = '```python\nx = f"{code}"\ny = 2\n```\n\n## End\n'
+
+    jira = markdown.markdown_to_jira_body(body)
+
+    assert '{noformat}\nx = f"{code}"\ny = 2\n{noformat}\n' in jira
+    assert 'h2. {anchor:end}End' in jira
+
+
+@pytest.mark.skipif(not PANDOC_HAS_JIRA, reason="pandoc lacks Jira formats")
+def test_fenced_code_with_both_jira_closing_markers_fails_without_corruption():
+    body = '```python\nx = "{code} {noformat}"\n```\n'
+
+    with pytest.raises(markdown.MarkdownConversionError, match="code.*noformat"):
+        markdown.markdown_to_jira_body(body)
+
+
+@pytest.mark.skipif(not PANDOC_HAS_JIRA, reason="pandoc lacks Jira formats")
+def test_unlabeled_fenced_code_with_noformat_marker_preserves_source():
+    jira = markdown.markdown_to_jira_body('```\nx = "{noformat}"\n```\n')
+
+    assert jira == '{code:none}\nx = "{noformat}"\n{code}\n'
