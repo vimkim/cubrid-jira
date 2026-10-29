@@ -404,7 +404,7 @@ def _normalize_fenced_code_placeholders(
     replacements: list[tuple[str, str, str | None]],
 ) -> str:
     """Separate Pandoc placeholders and recover source fence languages."""
-    for token, _content, language in replacements:
+    for token, content, language in replacements:
         block_re = re.compile(
             r"(?P<open>\{(?:code(?::[^}\r\n]*)?|noformat)\}[ \t]*\r?\n)"
             rf"{re.escape(token)}"
@@ -417,11 +417,18 @@ def _normalize_fenced_code_placeholders(
                 "pandoc did not preserve a fenced code block placeholder"
             )
 
-        if language is None:
+        if "{code}" in content:
+            if "{noformat}" in content:
+                raise MarkdownConversionError(
+                    "fenced code contains both {code} and {noformat} markers; "
+                    "Jira cannot render it safely as one block"
+                )
+            opening = closing = "{noformat}\n"
+        elif language is None and "{noformat}" not in content:
             opening = match.group("open")
             closing = match.group("close")
         else:
-            opening = f"{{code:{language}}}\n"
+            opening = f"{{code:{language or 'none'}}}\n"
             closing = "{code}\n"
 
         normalized = opening + token + "\n" + closing
