@@ -284,6 +284,11 @@ For `--body-file` and `--description-file`, write commands treat input as Markdo
 
 Markdown fence labels are normalized to jira.cubrid.org's formatter names during conversion. Common aliases such as `text` and `plaintext` become `none`, and any unknown label also falls back to `none`, preventing published descriptions from displaying an unsupported source-code formatter error.
 
+If a fenced code block contains the literal `{code}`, the writer uses Jira's
+`{noformat}` block to preserve the code. That block has no syntax highlighting.
+A block containing both `{code}` and `{noformat}` is rejected before publication
+because either Jira wrapper would close inside the code.
+
 Jira tables returned by `search` are always written as Markdown pipe tables so
 their column boundaries remain stable when cells are edited. Markdown body
 writes reject Pandoc simple tables with an actionable line-numbered error;

@@ -140,7 +140,7 @@ def jira_to_markdown(text: str) -> str:
         _warn_pandoc_read_once(stderr.splitlines()[0] if stderr else "")
         return text
 
-    return result.stdout.replace(escaped_pipe_token, r"\|").strip()
+    return result.stdout.replace(escaped_pipe_token, r"\|").strip("\n")
 
 
 def _is_korean_char(ch: str) -> bool:
