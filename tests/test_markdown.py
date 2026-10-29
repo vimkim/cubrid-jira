@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import subprocess
 from types import SimpleNamespace
 
@@ -325,3 +326,18 @@ def test_unlabeled_fenced_code_with_noformat_marker_preserves_source():
     jira = markdown.markdown_to_jira_body('```\nx = "{noformat}"\n```\n')
 
     assert jira == '{code:none}\nx = "{noformat}"\n{code}\n'
+
+
+@pytest.mark.skipif(not PANDOC_HAS_JIRA, reason="pandoc lacks Jira formats")
+def test_fenced_code_marker_survives_readback_at_start_of_document():
+    code = 'x = f"{code}"\ny = 2'
+    jira = markdown.markdown_to_jira_body(f"```python\n{code}\n```\n")
+    readback = markdown.jira_to_markdown(jira)
+
+    parsed = subprocess.run(
+        ["pandoc", "--from", "markdown", "--to", "json"],
+        input=readback, capture_output=True, text=True, check=True,
+    )
+    block = json.loads(parsed.stdout)["blocks"][0]
+    assert block["t"] == "CodeBlock"
+    assert block["c"][1] == code
