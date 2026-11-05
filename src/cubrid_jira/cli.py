@@ -219,6 +219,24 @@ def transition_resolution_field(transition: dict) -> dict | None:
     return field if isinstance(field, dict) else None
 
 
+def compact_transition(transition: dict) -> dict:
+    """Listing form of a transition: drop ``fields``, keep a compact resolution.
+
+    ``fields`` (every transition-screen field with its allowed values) is large
+    and mostly irrelevant to agents; only the resolution is worth keeping.
+    """
+    out = {k: v for k, v in transition.items() if k != "fields"}
+    field = transition_resolution_field(transition)
+    if field is not None:
+        out["resolution"] = {
+            "required": bool(field.get("required")),
+            "allowed": [
+                str(v.get("name", "?")) for v in field.get("allowedValues") or []
+            ],
+        }
+    return out
+
+
 def _allowed_resolution_names(field: dict) -> str:
     names = [repr(v.get("name", "?")) for v in field.get("allowedValues") or []]
     return ", ".join(names) or "(none)"
@@ -931,7 +949,11 @@ def cmd_transition(args) -> None:
             sys.exit(1)
         if _output_format(args) == "json":
             print(json.dumps(
-                {"issue": key, "transitions": transitions}, ensure_ascii=False
+                {
+                    "issue": key,
+                    "transitions": [compact_transition(t) for t in transitions],
+                },
+                ensure_ascii=False,
             ))
         else:
             print(f"Available transitions for {key}:", file=sys.stderr)

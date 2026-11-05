@@ -222,6 +222,29 @@ def test_transition_resolution_dry_run_json_shape(fake_server, capsys):
     }
 
 
+def test_transition_list_json_compacts_fields_to_resolution(fake_server, capsys):
+    fake_server.route("GET", TRANSITIONS_GET_CBRD_7, response={"transitions": [
+        {"id": "701", "name": "To Triage", "to": {"name": "Open"}, "fields": {
+            "fixVersions": {"allowedValues": [{"id": "1", "name": "v1"}]},
+        }},
+        {"id": "721", "name": "Bug Invalid", "hasScreen": True, "fields": {
+            "fixVersions": {"allowedValues": [{"id": "1", "name": "v1"}]},
+            "resolution": {"required": True, "allowedValues": [
+                {"id": "1", "name": "Fixed"}, {"id": "7", "name": "Not a bug"},
+            ]},
+        }},
+    ]})
+    main(["transition", "CBRD-7", "--output", "json"])
+    assert _sole_stdout_json(capsys) == {
+        "issue": "CBRD-7",
+        "transitions": [
+            {"id": "701", "name": "To Triage", "to": {"name": "Open"}},
+            {"id": "721", "name": "Bug Invalid", "hasScreen": True,
+             "resolution": {"required": True, "allowed": ["Fixed", "Not a bug"]}},
+        ],
+    }
+
+
 def test_transition_missing_resolution_json_mode_keeps_stdout_empty(
     fake_server, capsys
 ):

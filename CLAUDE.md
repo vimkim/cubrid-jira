@@ -53,7 +53,9 @@ transition carries a `resolution` field, `--resolution NAME` is **mandatory**
 (`Fixed`) silently and the resolution cannot be edited in place afterwards
 (`editmeta` omits it). A missing/unknown name, or `--resolution` on a
 transition without the field, exits 1 listing the allowed names — in dry-run
-too. Dry-run/live JSON add `"resolution": {"id", "name"}`.
+too. Dry-run/live JSON add `"resolution": {"id", "name"}`. List-mode JSON
+(no `--to`) drops each transition's bulky `fields` and instead gives a
+transition that carries one `"resolution": {"required": bool, "allowed": [names]}`.
 
 ## CRITICAL write-safety rules
 
