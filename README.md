@@ -265,6 +265,7 @@ cubrid-jira comment-update CBRD-XXXXX --id <COMMENT-ID> --body-file note.md [--f
 cubrid-jira comment-delete CBRD-XXXXX --id <COMMENT-ID>            # irreversible — prints a one-line warning
 cubrid-jira link       CBRD-A --type Relates --to CBRD-B   # also Blocks | Cloners | Duplicate
 cubrid-jira transition CBRD-A [--to "In Progress"]         # omit --to to list available
+cubrid-jira transition CBRD-A --to "Bug Invalid" --resolution "Not a bug"   # required when the transition sets a resolution
 cubrid-jira assign     CBRD-A --to <username>              # --to "" to unassign
 cubrid-jira update     CBRD-A [--summary "..."] [--description-file path] \
                        [--priority Major] [--label l1 --label l2] [--component sql] \
@@ -277,6 +278,8 @@ The parent is sent as the standard `parent` field without a field-name lookup.
 Malformed or missing parent keys are rejected before any request is sent.
 If `--field` also resolves to `parent`, its value must match `--parent`;
 conflicting parents are rejected before creation.
+
+**Transition resolutions.** A resolving transition (e.g. `Bug Invalid`, `Check in fix`) carries a `resolution` field on its transition screen. If it is sent without one, JIRA silently applies the screen default (`Fixed`), and the resolution cannot be edited in place afterwards. So when the selected transition has a `resolution` field, `--resolution NAME` (case-insensitive, matched against the allowed names, sent by id) is **required** — even when JIRA marks the field optional. Missing, unknown, or unexpected (`--resolution` on a transition with no resolution field, or without `--to`) values exit 1 with an error that lists the allowed names; this check runs in dry-run too, so the problem shows before `--yes`. Omit `--to` to list transitions with their resolution requirement and allowed names; dry-run shows the resolved name and id.
 
 `update` edits an existing issue's fields. At least one of `--summary`, `--description-file`, `--priority`, `--label`, `--component`, or `--field` is required. **`--label` and `--component` replace the full list** — they are not additive (Jira REST `fields` semantics). `--description-file -` reads from stdin.
 
@@ -428,7 +431,7 @@ Exactly **one** JSON object on stdout, nothing else. Status/errors still go to s
 | `comment-update` | `{"issue": "CBRD-1", "comment_id": "42", "updated": true}` | `{"dry_run": true, "requests": [PUT .../comment/42]}` |
 | `comment-delete` | `{"issue": "CBRD-1", "comment_id": "42", "deleted": true}` | `{"dry_run": true, "requests": [DELETE .../comment/42]}` |
 | `link` | `{"inward": "CBRD-1", "outward": "CBRD-2", "type": "Relates"}` | `{"dry_run": true, "requests": [POST issueLink]}` |
-| `transition` (with `--to`) | `{"issue": "CBRD-1", "transition_id": "21", "to": "In Progress"}` | `{"dry_run": true, "requests": [POST transitions]}` |
+| `transition` (with `--to`) | `{"issue": "CBRD-1", "transition_id": "21", "to": "In Progress"}` (+ `"resolution": {"id": "7", "name": "Not a bug"}` when the transition sets one) | `{"dry_run": true, "requests": [POST transitions]}` (+ the same `"resolution"` key) |
 | `transition` (list mode) | `{"issue": "CBRD-1", "transitions": [...]}` | (same — listing is a GET) |
 | `assign` (set) | `{"issue": "CBRD-1", "assignee": "vimkim"}` | `{"dry_run": true, "requests": [PUT assignee]}` |
 | `assign` (clear) | `{"issue": "CBRD-1", "assignee": null}` | (same) |

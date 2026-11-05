@@ -14,6 +14,11 @@ import pytest
 
 from cubrid_jira.cli import main
 
+# The CLI fetches transitions with their screen fields so it can see resolutions.
+TRANSITIONS_GET_CBRD_7 = (
+    "/rest/api/2/issue/CBRD-7/transitions?expand=transitions.fields"
+)
+
 
 @pytest.fixture(autouse=True)
 def _identity_markdown_conversion(monkeypatch):
@@ -167,7 +172,7 @@ def test_link_live_json_shape(fake_server, capsys):
 def test_transition_live_json_shape(fake_server, tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("CUBRID_JIRA_DIR", str(tmp_path))
     fake_server.route(
-        "GET", "/rest/api/2/issue/CBRD-7/transitions",
+        "GET", TRANSITIONS_GET_CBRD_7,
         response={"transitions": [{"id": "21", "name": "In Progress"}]},
     )
     fake_server.route("POST", "/rest/api/2/issue/CBRD-7/transitions", response={})
@@ -178,6 +183,55 @@ def test_transition_live_json_shape(fake_server, tmp_path, monkeypatch, capsys):
     assert _sole_stdout_json(capsys) == {
         "issue": "CBRD-7", "transition_id": "21", "to": "in progress",
     }
+
+
+_RESOLVING = {"transitions": [{"id": "721", "name": "Bug Invalid", "fields": {
+    "resolution": {"required": True, "allowedValues": [
+        {"id": "1", "name": "Fixed"}, {"id": "7", "name": "Not a bug"},
+    ]},
+}}]}
+
+
+def test_transition_resolution_live_json_shape(fake_server, tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("CUBRID_JIRA_DIR", str(tmp_path))
+    fake_server.route("GET", TRANSITIONS_GET_CBRD_7, response=_RESOLVING)
+    fake_server.route("POST", "/rest/api/2/issue/CBRD-7/transitions", response={})
+    main([
+        "transition", "CBRD-7", "--to", "Bug Invalid",
+        "--resolution", "not a bug", "--yes", "--output", "json",
+    ])
+    assert _sole_stdout_json(capsys) == {
+        "issue": "CBRD-7", "transition_id": "721", "to": "Bug Invalid",
+        "resolution": {"id": "7", "name": "Not a bug"},
+    }
+
+
+def test_transition_resolution_dry_run_json_shape(fake_server, capsys):
+    fake_server.route("GET", TRANSITIONS_GET_CBRD_7, response=_RESOLVING)
+    main([
+        "transition", "CBRD-7", "--to", "Bug Invalid",
+        "--resolution", "Not a bug", "--output", "json",
+    ])
+    out = _sole_stdout_json(capsys)
+    assert out["dry_run"] is True
+    assert out["resolution"] == {"id": "7", "name": "Not a bug"}
+    (req,) = out["requests"]
+    assert req["method"] == "POST"
+    assert req["body"] == {
+        "transition": {"id": "721"}, "fields": {"resolution": {"id": "7"}},
+    }
+
+
+def test_transition_missing_resolution_json_mode_keeps_stdout_empty(
+    fake_server, capsys
+):
+    fake_server.route("GET", TRANSITIONS_GET_CBRD_7, response=_RESOLVING)
+    with pytest.raises(SystemExit) as exc:
+        main(["transition", "CBRD-7", "--to", "Bug Invalid", "--output", "json"])
+    assert exc.value.code == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "'Not a bug'" in captured.err
 
 
 def test_assign_live_json_shape(fake_server, capsys):
@@ -211,7 +265,7 @@ def test_update_live_json_shape(fake_server, tmp_path, monkeypatch, capsys):
 
 def test_transition_list_json(fake_server, capsys):
     fake_server.route(
-        "GET", "/rest/api/2/issue/CBRD-7/transitions",
+        "GET", TRANSITIONS_GET_CBRD_7,
         response={"transitions": [{"id": "11", "name": "Open"}]},
     )
     main(["transition", "CBRD-7", "--output", "json"])

@@ -17,6 +17,11 @@ from conftest import PANDOC_HAS_JIRA, make_http_error
 from cubrid_jira.cli import main
 from cubrid_jira.markdown import MarkdownConversionError
 
+# The CLI fetches transitions with their screen fields so it can see resolutions.
+TRANSITIONS_GET_CBRD_7 = (
+    "/rest/api/2/issue/CBRD-7/transitions?expand=transitions.fields"
+)
+
 
 @pytest.fixture(autouse=True)
 def _identity_markdown_conversion(monkeypatch):
@@ -811,7 +816,7 @@ def test_transition_resolves_by_name_then_posts(fake_server, tmp_path, monkeypat
     monkeypatch.setenv("CUBRID_JIRA_DIR", str(tmp_path))
     (tmp_path / "CBRD-7.md").write_text("stale")
     fake_server.route(
-        "GET", "/rest/api/2/issue/CBRD-7/transitions",
+        "GET", TRANSITIONS_GET_CBRD_7,
         response={"transitions": [
             {"id": "11", "name": "Open"},
             {"id": "21", "name": "In Progress"},
@@ -831,7 +836,7 @@ def test_transition_resolves_by_name_then_posts(fake_server, tmp_path, monkeypat
 
 def test_transition_listing_when_no_to(fake_server, capsys):
     fake_server.route(
-        "GET", "/rest/api/2/issue/CBRD-7/transitions",
+        "GET", TRANSITIONS_GET_CBRD_7,
         response={"transitions": [{"id": "11", "name": "Open"}]},
     )
     main(["transition", "CBRD-7"])
@@ -841,13 +846,154 @@ def test_transition_listing_when_no_to(fake_server, capsys):
 
 def test_transition_unknown_name_exits(fake_server, capsys):
     fake_server.route(
-        "GET", "/rest/api/2/issue/CBRD-7/transitions",
+        "GET", TRANSITIONS_GET_CBRD_7,
         response={"transitions": [{"id": "11", "name": "Open"}]},
     )
     with pytest.raises(SystemExit):
         main(["transition", "CBRD-7", "--to", "Frobnicate", "--yes"])
     err = capsys.readouterr().err
     assert "No transition" in err
+
+
+def _resolving_transitions() -> dict:
+    """Open issue: a plain transition plus 'Bug Invalid' carrying a resolution."""
+    return {"transitions": [
+        {"id": "701", "name": "To Triage", "fields": {}},
+        {"id": "721", "name": "Bug Invalid", "fields": {
+            "resolution": {
+                "required": True,
+                "allowedValues": [
+                    {"id": "1", "name": "Fixed"},
+                    {"id": "7", "name": "Not a bug"},
+                    {"id": "10", "name": "Won't Fix"},
+                    {"id": "2", "name": "Won't Fix_Bug"},
+                ],
+            },
+        }},
+    ]}
+
+
+def test_transition_sends_chosen_resolution_by_id(fake_server, tmp_path, monkeypatch):
+    monkeypatch.setenv("CUBRID_JIRA_DIR", str(tmp_path))
+    fake_server.route("GET", TRANSITIONS_GET_CBRD_7, response=_resolving_transitions())
+    fake_server.route("POST", "/rest/api/2/issue/CBRD-7/transitions", response={})
+
+    main([
+        "transition", "CBRD-7", "--to", "bug invalid",
+        "--resolution", "NOT A BUG", "--yes",
+    ])
+
+    assert fake_server.requests[0].url.endswith("?expand=transitions.fields")
+    post = fake_server.requests[1]
+    assert json.loads(post.body.decode()) == {
+        "transition": {"id": "721"},
+        "fields": {"resolution": {"id": "7"}},
+    }
+
+
+def test_transition_resolution_match_is_exact_not_prefix(fake_server, tmp_path, monkeypatch):
+    # "Won't Fix" must not match "Won't Fix_Bug" (id 2).
+    monkeypatch.setenv("CUBRID_JIRA_DIR", str(tmp_path))
+    fake_server.route("GET", TRANSITIONS_GET_CBRD_7, response=_resolving_transitions())
+    fake_server.route("POST", "/rest/api/2/issue/CBRD-7/transitions", response={})
+
+    main([
+        "transition", "CBRD-7", "--to", "Bug Invalid",
+        "--resolution", "Won't Fix", "--yes",
+    ])
+
+    body = json.loads(fake_server.requests[1].body.decode())
+    assert body["fields"] == {"resolution": {"id": "10"}}
+
+
+def test_transition_missing_resolution_exits_in_dry_run(fake_server, capsys):
+    fake_server.route("GET", TRANSITIONS_GET_CBRD_7, response=_resolving_transitions())
+
+    with pytest.raises(SystemExit) as exc:
+        main(["transition", "CBRD-7", "--to", "Bug Invalid"])  # dry-run default
+
+    assert exc.value.code == 1
+    err = capsys.readouterr().err
+    assert "--resolution" in err
+    assert "'Not a bug'" in err and "'Fixed'" in err
+    assert [r.method for r in fake_server.requests] == ["GET"]  # nothing POSTed
+
+
+def test_transition_optional_resolution_field_still_requires_flag(fake_server, capsys):
+    transitions = _resolving_transitions()
+    transitions["transitions"][1]["fields"]["resolution"]["required"] = False
+    fake_server.route("GET", TRANSITIONS_GET_CBRD_7, response=transitions)
+
+    with pytest.raises(SystemExit) as exc:
+        main(["transition", "CBRD-7", "--to", "Bug Invalid", "--yes"])
+
+    assert exc.value.code == 1
+    assert [r.method for r in fake_server.requests] == ["GET"]
+
+
+def test_transition_unknown_resolution_exits_with_allowed_names(fake_server, capsys):
+    fake_server.route("GET", TRANSITIONS_GET_CBRD_7, response=_resolving_transitions())
+
+    with pytest.raises(SystemExit) as exc:
+        main([
+            "transition", "CBRD-7", "--to", "Bug Invalid",
+            "--resolution", "Bogus", "--yes",
+        ])
+
+    assert exc.value.code == 1
+    err = capsys.readouterr().err
+    assert "'Bogus'" in err and "'Not a bug'" in err
+    assert [r.method for r in fake_server.requests] == ["GET"]
+
+
+def test_transition_resolution_on_transition_without_field_exits(fake_server, capsys):
+    fake_server.route("GET", TRANSITIONS_GET_CBRD_7, response=_resolving_transitions())
+
+    with pytest.raises(SystemExit) as exc:
+        main([
+            "transition", "CBRD-7", "--to", "To Triage",
+            "--resolution", "Fixed", "--yes",
+        ])
+
+    assert exc.value.code == 1
+    assert "no resolution field" in capsys.readouterr().err
+    assert [r.method for r in fake_server.requests] == ["GET"]
+
+
+def test_transition_resolution_without_to_exits(fake_server, capsys):
+    fake_server.route("GET", TRANSITIONS_GET_CBRD_7, response=_resolving_transitions())
+
+    with pytest.raises(SystemExit) as exc:
+        main(["transition", "CBRD-7", "--resolution", "Fixed"])
+
+    assert exc.value.code == 1
+    assert "--to" in capsys.readouterr().err
+
+
+def test_transition_dry_run_text_shows_resolution(fake_server, capsys):
+    fake_server.route("GET", TRANSITIONS_GET_CBRD_7, response=_resolving_transitions())
+
+    main(["transition", "CBRD-7", "--to", "Bug Invalid", "--resolution", "Not a bug"])
+
+    captured = capsys.readouterr()
+    assert "Resolution: Not a bug (id 7)" in captured.err
+    assert json.loads(captured.out) == {
+        "transition": {"id": "721"},
+        "fields": {"resolution": {"id": "7"}},
+    }
+    assert [r.method for r in fake_server.requests] == ["GET"]  # dry-run: no POST
+
+
+def test_transition_listing_shows_resolution_names(fake_server, capsys):
+    fake_server.route("GET", TRANSITIONS_GET_CBRD_7, response=_resolving_transitions())
+
+    main(["transition", "CBRD-7"])
+
+    out = capsys.readouterr().out
+    assert "701: To Triage" in out and "701: To Triage  [" not in out
+    bug_invalid = next(line for line in out.splitlines() if "721: Bug Invalid" in line)
+    assert "resolution (required)" in bug_invalid
+    assert "'Not a bug'" in bug_invalid
 
 
 # --------------------------------------------------------------------------- #

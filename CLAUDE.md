@@ -44,6 +44,17 @@ reparent           <KEY> --to <PARENT>            move a Sub-task between parent
 Full background, traps, and curl-only smoke test:
 `docs/reparent-subtasks-via-convert-wizard.md`.
 
+## Transition resolutions
+
+`transition` fetches `…/transitions?expand=transitions.fields`. If the chosen
+transition carries a `resolution` field, `--resolution NAME` is **mandatory**
+(case-insensitive match on `allowedValues`, sent by id as
+`fields.resolution`), because JIRA otherwise applies the screen default
+(`Fixed`) silently and the resolution cannot be edited in place afterwards
+(`editmeta` omits it). A missing/unknown name, or `--resolution` on a
+transition without the field, exits 1 listing the allowed names — in dry-run
+too. Dry-run/live JSON add `"resolution": {"id", "name"}`.
+
 ## CRITICAL write-safety rules
 
 - **All writes are dry-run by default.** `--yes` is required to actually send. Treat the absence of `--yes` as a no-op.

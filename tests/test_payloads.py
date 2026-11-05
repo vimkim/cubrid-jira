@@ -74,6 +74,13 @@ def test_transition_payload_uses_id():
     assert build_transition_payload("31") == {"transition": {"id": "31"}}
 
 
+def test_transition_payload_with_resolution_id():
+    assert build_transition_payload("721", "7") == {
+        "transition": {"id": "721"},
+        "fields": {"resolution": {"id": "7"}},
+    }
+
+
 def test_assignee_clear_sends_null():
     """`--to ""` is the documented way to unassign — must serialise to JSON null."""
     assert build_assignee_payload("") == {"name": None}

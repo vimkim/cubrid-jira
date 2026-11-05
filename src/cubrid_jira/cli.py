@@ -179,8 +179,13 @@ def build_comment_update_payload(body: str) -> dict:
     return {"body": body}
 
 
-def build_transition_payload(transition_id: str) -> dict:
-    return {"transition": {"id": transition_id}}
+def build_transition_payload(
+    transition_id: str, resolution_id: str | None = None
+) -> dict:
+    payload: dict = {"transition": {"id": transition_id}}
+    if resolution_id is not None:
+        payload["fields"] = {"resolution": {"id": resolution_id}}
+    return payload
 
 
 def build_assignee_payload(name: str | None) -> dict:
@@ -203,6 +208,60 @@ def resolve_transition_id(transitions: list[dict], wanted_name: str) -> str:
             f"Ambiguous transition name {wanted_name!r}: matched {len(matches)} transitions"
         )
     return str(matches[0]["id"])
+
+
+def transition_resolution_field(transition: dict) -> dict | None:
+    """The transition screen's ``resolution`` field, or None if it has none.
+
+    Needs transitions fetched with ``expand=transitions.fields``.
+    """
+    field = (transition.get("fields") or {}).get("resolution")
+    return field if isinstance(field, dict) else None
+
+
+def _allowed_resolution_names(field: dict) -> str:
+    names = [repr(v.get("name", "?")) for v in field.get("allowedValues") or []]
+    return ", ".join(names) or "(none)"
+
+
+def resolve_resolution(transition: dict, wanted: str | None) -> dict | None:
+    """Pick the resolution to send for ``transition``; ``{"id", "name"}`` or None.
+
+    JIRA applies the transition screen's default resolution (``Fixed``) when a
+    resolving transition is sent without one, and it cannot be changed in place
+    afterwards. So a transition that carries a ``resolution`` field never goes
+    out without an explicit, validated ``--resolution``, even when JIRA marks
+    the field optional.
+    """
+    field = transition_resolution_field(transition)
+    name = transition.get("name", "?")
+    if field is None:
+        if wanted is not None:
+            raise ValueError(
+                f"Transition {name!r} has no resolution field; "
+                "drop --resolution."
+            )
+        return None
+    if wanted is None:
+        raise ValueError(
+            f"Transition {name!r} sets a resolution; pass --resolution NAME. "
+            f"Allowed: {_allowed_resolution_names(field)}"
+        )
+    target = wanted.strip().lower()
+    matches = [
+        v for v in field.get("allowedValues") or []
+        if str(v.get("name", "")).strip().lower() == target
+    ]
+    if not matches:
+        raise ValueError(
+            f"Resolution {wanted!r} is not allowed for transition {name!r}. "
+            f"Allowed: {_allowed_resolution_names(field)}"
+        )
+    if len(matches) > 1:
+        raise ValueError(
+            f"Ambiguous resolution {wanted!r}: matched {len(matches)} values"
+        )
+    return {"id": str(matches[0]["id"]), "name": str(matches[0]["name"])}
 
 
 # --------------------------------------------------------------------------- #
@@ -339,18 +398,24 @@ def _validate_link_type(link_type: str) -> None:
         sys.exit(1)
 
 
-def _emit(args, client: JiraClient, live_result: dict | None) -> None:
+def _emit(
+    args,
+    client: JiraClient,
+    live_result: dict | None,
+    dry_run_extra: dict | None = None,
+) -> None:
     """Centralised --output json emitter for write subcommands.
 
     In ``--output json`` mode this prints exactly one line on stdout:
-    the dry-run plan or the live success result. In ``text`` mode it
-    does nothing — the per-command handler is responsible for any
-    stderr status lines.
+    the dry-run plan (plus ``dry_run_extra`` keys) or the live success
+    result. In ``text`` mode it does nothing — the per-command handler is
+    responsible for any stderr status lines.
     """
     if _output_format(args) != "json":
         return
     if _is_dry_run(args):
         payload = {"dry_run": True, "requests": client.recorded_requests}
+        payload.update(dry_run_extra or {})
     else:
         payload = live_result or {}
     print(json.dumps(payload, ensure_ascii=False))
@@ -837,14 +902,33 @@ def cmd_link(args) -> None:
 # transition
 # --------------------------------------------------------------------------- #
 
+def _transition_list_line(t: dict) -> str:
+    line = f"  {t.get('id')}: {t.get('name')}"
+    field = transition_resolution_field(t)
+    if field is not None:
+        req = "required" if field.get("required") else "optional"
+        line += (
+            f"  [resolution ({req}) via --resolution: "
+            f"{_allowed_resolution_names(field)}]"
+        )
+    return line
+
+
 def cmd_transition(args) -> None:
     key = parse_issue_key(args.issue)
     client = _make_client(args)
 
-    resp = client.request("GET", f"/rest/api/2/issue/{key}/transitions")
+    # expand=transitions.fields adds each transition screen's fields, which is
+    # where JIRA exposes the resolution a resolving transition would set.
+    resp = client.request(
+        "GET", f"/rest/api/2/issue/{key}/transitions?expand=transitions.fields"
+    )
     transitions = (resp or {}).get("transitions") or []
 
     if not args.to:
+        if args.resolution is not None:
+            print("Error: --resolution requires --to.", file=sys.stderr)
+            sys.exit(1)
         if _output_format(args) == "json":
             print(json.dumps(
                 {"issue": key, "transitions": transitions}, ensure_ascii=False
@@ -852,23 +936,35 @@ def cmd_transition(args) -> None:
         else:
             print(f"Available transitions for {key}:", file=sys.stderr)
             for t in transitions:
-                print(f"  {t.get('id')}: {t.get('name')}")
+                print(_transition_list_line(t))
         return
 
     try:
         tid = resolve_transition_id(transitions, args.to)
+        transition = next(t for t in transitions if str(t["id"]) == tid)
+        resolution = resolve_resolution(transition, args.resolution)
     except ValueError as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
 
+    if resolution is not None and _output_format(args) == "text":
+        print(
+            f"Resolution: {resolution['name']} (id {resolution['id']})",
+            file=sys.stderr,
+        )
+
     client.request(
         "POST",
         f"/rest/api/2/issue/{key}/transitions",
-        body=build_transition_payload(tid),
+        body=build_transition_payload(
+            tid, resolution["id"] if resolution else None
+        ),
     )
 
+    resolution_extra = {"resolution": resolution} if resolution else {}
+
     if _is_dry_run(args):
-        _emit(args, client, None)
+        _emit(args, client, None, dry_run_extra=resolution_extra)
         return
 
     cache_dir = resolve_cache_dir(args.dir, server=args.server)
@@ -878,7 +974,11 @@ def cmd_transition(args) -> None:
             f"Transitioned {key} -> {args.to}; cache entry invalidated.",
             file=sys.stderr,
         )
-    _emit(args, client, {"issue": key, "transition_id": tid, "to": args.to})
+    _emit(
+        args,
+        client,
+        {"issue": key, "transition_id": tid, "to": args.to, **resolution_extra},
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -1660,6 +1760,15 @@ def _build_parser() -> argparse.ArgumentParser:
     p_transition.add_argument(
         "--to", default=None,
         help="Target transition name (case-insensitive). Omit to list available transitions.",
+    )
+    p_transition.add_argument(
+        "--resolution", default=None, metavar="NAME",
+        help=(
+            "Resolution name (case-insensitive), e.g. \"Not a bug\". Required "
+            "whenever the transition carries a resolution field (JIRA would "
+            "otherwise silently apply its default, Fixed); an error otherwise. "
+            "Omit --to to see which transitions carry one and the allowed names."
+        ),
     )
     _add_write_globals(p_transition)
     p_transition.set_defaults(func=cmd_transition)
