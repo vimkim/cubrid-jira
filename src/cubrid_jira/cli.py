@@ -220,12 +220,17 @@ def transition_resolution_field(transition: dict) -> dict | None:
 
 
 def compact_transition(transition: dict) -> dict:
-    """Listing form of a transition: drop ``fields``, keep a compact resolution.
+    """Listing form of a transition: small and agent-friendly.
 
     ``fields`` (every transition-screen field with its allowed values) is large
     and mostly irrelevant to agents; only the resolution is worth keeping.
+    ``to`` (the target status) is cut to its ``id`` and ``name``, dropping the
+    self/iconUrl/statusCategory noise.
     """
     out = {k: v for k, v in transition.items() if k != "fields"}
+    to = out.get("to")
+    if isinstance(to, dict):
+        out["to"] = {k: to[k] for k in ("id", "name") if k in to}
     field = transition_resolution_field(transition)
     if field is not None:
         out["resolution"] = {

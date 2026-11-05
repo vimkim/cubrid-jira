@@ -432,7 +432,7 @@ Exactly **one** JSON object on stdout, nothing else. Status/errors still go to s
 | `comment-delete` | `{"issue": "CBRD-1", "comment_id": "42", "deleted": true}` | `{"dry_run": true, "requests": [DELETE .../comment/42]}` |
 | `link` | `{"inward": "CBRD-1", "outward": "CBRD-2", "type": "Relates"}` | `{"dry_run": true, "requests": [POST issueLink]}` |
 | `transition` (with `--to`) | `{"issue": "CBRD-1", "transition_id": "21", "to": "In Progress"}` (+ `"resolution": {"id": "7", "name": "Not a bug"}` when the transition sets one) | `{"dry_run": true, "requests": [POST transitions]}` (+ the same `"resolution"` key) |
-| `transition` (list mode) | `{"issue": "CBRD-1", "transitions": [{"id": "721", "name": "Bug Invalid", …, "resolution": {"required": true, "allowed": ["Fixed", "Not a bug", …]}}, …]}` — each transition's `fields` is dropped; `resolution` appears only on transitions that carry one | (same — listing is a GET) |
+| `transition` (list mode) | `{"issue": "CBRD-1", "transitions": [{"id": "721", "name": "Bug Invalid", …, "resolution": {"required": true, "allowed": ["Fixed", "Not a bug", …]}}, …]}` — each transition's `fields` is dropped and `to` is cut to `{id, name}`; `resolution` appears only on transitions that carry one | (same — listing is a GET) |
 | `assign` (set) | `{"issue": "CBRD-1", "assignee": "vimkim"}` | `{"dry_run": true, "requests": [PUT assignee]}` |
 | `assign` (clear) | `{"issue": "CBRD-1", "assignee": null}` | (same) |
 | `convert-to-issue` | `{"issue": "CBRD-1", "type": "Task", "previous_parent": "CBRD-X"}` | `{"dry_run": true, "requests": [POST step1, step3, step4]}` |

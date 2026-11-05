@@ -224,7 +224,14 @@ def test_transition_resolution_dry_run_json_shape(fake_server, capsys):
 
 def test_transition_list_json_compacts_fields_to_resolution(fake_server, capsys):
     fake_server.route("GET", TRANSITIONS_GET_CBRD_7, response={"transitions": [
-        {"id": "701", "name": "To Triage", "to": {"name": "Open"}, "fields": {
+        {"id": "701", "name": "To Triage", "fields": {
+            "fixVersions": {"allowedValues": [{"id": "1", "name": "v1"}]},
+        }, "to": {
+            "self": "http://x/status/1", "description": "Issue Created",
+            "iconUrl": "http://x/open.png", "name": "Open", "id": "1",
+            "statusCategory": {"id": 2, "key": "new"},
+        }},
+        {"id": "702", "name": "No Status", "fields": {
             "fixVersions": {"allowedValues": [{"id": "1", "name": "v1"}]},
         }},
         {"id": "721", "name": "Bug Invalid", "hasScreen": True, "fields": {
@@ -238,7 +245,8 @@ def test_transition_list_json_compacts_fields_to_resolution(fake_server, capsys)
     assert _sole_stdout_json(capsys) == {
         "issue": "CBRD-7",
         "transitions": [
-            {"id": "701", "name": "To Triage", "to": {"name": "Open"}},
+            {"id": "701", "name": "To Triage", "to": {"id": "1", "name": "Open"}},
+            {"id": "702", "name": "No Status"},
             {"id": "721", "name": "Bug Invalid", "hasScreen": True,
              "resolution": {"required": True, "allowed": ["Fixed", "Not a bug"]}},
         ],

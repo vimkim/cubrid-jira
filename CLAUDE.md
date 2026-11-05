@@ -55,7 +55,8 @@ transition carries a `resolution` field, `--resolution NAME` is **mandatory**
 transition without the field, exits 1 listing the allowed names — in dry-run
 too. Dry-run/live JSON add `"resolution": {"id", "name"}`. List-mode JSON
 (no `--to`) drops each transition's bulky `fields` and instead gives a
-transition that carries one `"resolution": {"required": bool, "allowed": [names]}`.
+transition that carries one `"resolution": {"required": bool, "allowed": [names]}`;
+`to` is cut to `{id, name}`.
 
 ## CRITICAL write-safety rules
 
