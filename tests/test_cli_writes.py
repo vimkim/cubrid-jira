@@ -65,15 +65,94 @@ def test_create_dry_run_does_not_send(fake_server, tmp_path, capsys, monkeypatch
     ])
     assert fake_server.requests == []
     out = capsys.readouterr()
-    body = json.loads(out.out)
-    assert body == {
+    decoder, text, bodies = json.JSONDecoder(), out.out.strip(), []
+    while text:
+        obj, end = decoder.raw_decode(text)
+        bodies.append(obj)
+        text = text[end:].lstrip()
+    post_body, put_body = bodies
+    assert post_body == {
         "fields": {
             "project": {"key": "CBRD"},
             "summary": "the title",
             "issuetype": {"name": "Bug"},
-            "priority": {"name": "Major"},
         }
     }
+    assert put_body == {"fields": {"priority": {"name": "Major"}}}
+    assert "PUT http://jira.cubrid.org/rest/api/2/issue/<new-issue-key>" in out.err
+
+
+def test_create_priority_dry_run_json_plans_post_then_put(fake_server, tmp_path, capsys, monkeypatch):
+    monkeypatch.setenv("CUBRID_JIRA_DIR", str(tmp_path))
+    main([
+        "create", "--project", "CBRD", "--type", "Task", "--summary", "t",
+        "--priority", "Minor", "--link-relates", "CBRD-1", "--output", "json",
+    ])
+    assert fake_server.requests == []
+    reqs = json.loads(capsys.readouterr().out)["requests"]
+    assert [(r["method"], r["url"]) for r in reqs] == [
+        ("POST", "http://jira.cubrid.org/rest/api/2/issue"),
+        ("PUT", "http://jira.cubrid.org/rest/api/2/issue/<new-issue-key>"),
+        ("POST", "http://jira.cubrid.org/rest/api/2/issueLink"),
+    ]
+    assert "priority" not in reqs[0]["body"]["fields"]
+    assert reqs[1]["body"] == {"fields": {"priority": {"name": "Minor"}}}
+
+
+def test_create_priority_live_posts_without_priority_then_puts(
+    fake_server, tmp_path, capsys, monkeypatch
+):
+    monkeypatch.setenv("CUBRID_JIRA_DIR", str(tmp_path))
+    fake_server.route("POST", "/rest/api/2/issue", response={"id": "1", "key": "CBRD-999"})
+    fake_server.route("PUT", "/rest/api/2/issue/CBRD-999", response={})
+    fake_server.route(
+        "GET", "/rest/api/2/issue/CBRD-999?expand=renderedFields",
+        response={"key": "CBRD-999", "fields": {"summary": "t"}},
+    )
+    main([
+        "create", "--project", "CBRD", "--type", "Task", "--summary", "t",
+        "--priority", "Minor", "--yes", "--output", "json",
+    ])
+    reqs = fake_server.requests
+    assert [r.method for r in reqs[:2]] == ["POST", "PUT"]
+    assert "priority" not in json.loads(reqs[0].body)["fields"]
+    assert reqs[1].url == "http://jira.cubrid.org/rest/api/2/issue/CBRD-999"
+    assert json.loads(reqs[1].body) == {"fields": {"priority": {"name": "Minor"}}}
+    result = json.loads(capsys.readouterr().out)
+    assert result["key"] == "CBRD-999"
+    assert "priority_error" not in result
+
+
+def test_create_priority_put_failure_keeps_key_and_exits_nonzero(
+    fake_server, tmp_path, capsys, monkeypatch
+):
+    monkeypatch.setenv("CUBRID_JIRA_DIR", str(tmp_path))
+    fake_server.route("POST", "/rest/api/2/issue", response={"id": "1", "key": "CBRD-999"})
+    fake_server.route("PUT", "/rest/api/2/issue/CBRD-999", raise_=make_http_error(400))
+    with pytest.raises(SystemExit) as exc:
+        main([
+            "create", "--project", "CBRD", "--type", "Task", "--summary", "t",
+            "--priority", "Minor", "--link-relates", "CBRD-1",
+            "--yes", "--output", "json",
+        ])
+    assert exc.value.code == 5
+    out = capsys.readouterr()
+    result = json.loads(out.out)
+    assert result["key"] == "CBRD-999"
+    assert "priority_error" in result
+    assert "CBRD-999" in out.err
+    # Stopped after the PUT: no link request, no retry.
+    assert [r.method for r in fake_server.requests] == ["POST", "PUT"]
+
+
+def test_create_without_priority_sends_no_put(fake_server, tmp_path, capsys, monkeypatch):
+    monkeypatch.setenv("CUBRID_JIRA_DIR", str(tmp_path))
+    main([
+        "create", "--project", "CBRD", "--type", "Task", "--summary", "t",
+        "--output", "json",
+    ])
+    reqs = json.loads(capsys.readouterr().out)["requests"]
+    assert [r["method"] for r in reqs] == ["POST"]
 
 
 @pytest.mark.parametrize("write_flags", [[], ["--yes", "--dry-run"]])

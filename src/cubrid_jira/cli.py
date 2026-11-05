@@ -692,7 +692,8 @@ def cmd_create(args) -> None:
         summary=args.summary,
         parent=args.parent,
         description=description,
-        priority=args.priority,
+        # Priority is not on CBRD's create screen (POST returns 400), but
+        # it is on the edit screen; it is sent as a follow-up PUT below.
         assignee=args.assignee,
         labels=args.labels,
         components=args.components,
@@ -703,6 +704,35 @@ def cmd_create(args) -> None:
     new_key = (resp or {}).get("key")
     if args.parent is not None and not _is_dry_run(args):
         invalidate(args.parent, resolve_cache_dir(args.dir, server=args.server))
+
+    if args.priority and (new_key or _is_dry_run(args)):
+        target = new_key or "<new-issue-key>"
+        try:
+            client.request(
+                "PUT", f"/rest/api/2/issue/{target}",
+                body=build_update_payload(priority=args.priority),
+            )
+        except (SystemExit, JiraError) as e:
+            # The issue exists; never hide it. The client already printed
+            # the HTTP detail. Stop here (no links, no retry) and exit with
+            # the PUT's HTTP-mapped code.
+            code = e.code if isinstance(e, SystemExit) else 1
+            url = f"{args.server.rstrip('/')}/browse/{new_key}"
+            print(f"Error: created {new_key} ({url}) but setting priority "
+                  f"{args.priority!r} failed; set it with "
+                  f"`cubrid-jira update {new_key} --priority {args.priority} --yes`.",
+                  file=sys.stderr)
+            if args.link_relates or args.link_blocks:
+                print("Error: link requests were not sent.", file=sys.stderr)
+            _emit(args, client, {
+                "key": new_key,
+                "id": (resp or {}).get("id"),
+                "self": (resp or {}).get("self"),
+                "url": url,
+                "priority_error": f"PUT /rest/api/2/issue/{new_key} failed "
+                                  f"(exit {code}); see stderr",
+            })
+            sys.exit(code)
 
     link_specs: list[tuple[str, str]] = []
     for k in args.link_relates or []:
@@ -749,7 +779,8 @@ def cmd_create(args) -> None:
         if _output_format(args) == "text":
             print(
                 "Warning: create response did not include a 'key' field; "
-                "cache not updated.",
+                "cache not updated"
+                + ("; priority not set." if args.priority else "."),
                 file=sys.stderr,
             )
     _emit(args, client, live_result)
@@ -1701,7 +1732,10 @@ def _build_parser() -> argparse.ArgumentParser:
                           help="Markdown file for the issue description; "
                                "use --from jira for raw Jira wiki markup.")
     p_create.add_argument("--priority",
-                          help="One of: Blocker, Critical, Major, Minor, Trivial.")
+                          help="One of: Blocker, Critical, Major, Minor, Trivial. "
+                               "Applied after creation by a follow-up edit "
+                               "(PUT issue), because the create screen does not "
+                               "accept priority.")
     p_create.add_argument("--assignee", help="JIRA username to assign on creation.")
     p_create.add_argument("--label", action="append", dest="labels", metavar="LABEL",
                           help="Repeat for multiple labels.")

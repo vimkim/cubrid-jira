@@ -279,6 +279,14 @@ Malformed or missing parent keys are rejected before any request is sent.
 If `--field` also resolves to `parent`, its value must match `--parent`;
 conflicting parents are rejected before creation.
 
+`create --priority` is applied by a follow-up edit: CBRD's create screen
+rejects `priority` (HTTP 400), so the POST omits it and a
+`PUT /rest/api/2/issue/<key>` with only the priority follows, before any link
+requests. Dry-run shows both requests. If the PUT fails, the new key is still
+printed to stderr (and returned as `key` plus `priority_error` under
+`--output json`), link requests are skipped, and the command exits with the
+PUT's HTTP-mapped code; fix it with `update <key> --priority NAME --yes`.
+
 **Transition resolutions.** A resolving transition (e.g. `Bug Invalid`, `Check in fix`) carries a `resolution` field on its transition screen. If it is sent without one, JIRA silently applies the screen default (`Fixed`), and the resolution cannot be edited in place afterwards. So when the selected transition has a `resolution` field, `--resolution NAME` (case-insensitive, matched against the allowed names, sent by id) is **required** — even when JIRA marks the field optional. Missing, unknown, or unexpected (`--resolution` on a transition with no resolution field, or without `--to`) values exit 1 with an error that lists the allowed names; this check runs in dry-run too, so the problem shows before `--yes`. Omit `--to` to list transitions with their resolution requirement and allowed names; dry-run shows the resolved name and id.
 
 `update` edits an existing issue's fields. At least one of `--summary`, `--description-file`, `--priority`, `--label`, `--component`, or `--field` is required. **`--label` and `--component` replace the full list** — they are not additive (Jira REST `fields` semantics). `--description-file -` reads from stdin.
@@ -425,7 +433,7 @@ Exactly **one** JSON object on stdout, nothing else. Status/errors still go to s
 
 | Subcommand | Live success shape | Dry-run shape |
 |---|---|---|
-| `create` | `{"key": "CBRD-9999", "url": "..."}` | `{"dry_run": true, "requests": [POST issue, POST issueLink, …]}` |
+| `create` | `{"key": "CBRD-9999", "url": "..."}` (+ `"priority_error"` and a nonzero exit if the follow-up priority PUT fails) | `{"dry_run": true, "requests": [POST issue, PUT issue (priority), POST issueLink, …]}` |
 | `comment` | `{"issue": "CBRD-1", "comment_id": "42"}` | `{"dry_run": true, "requests": [POST .../comment]}` |
 | `comment-list` | `{"issue": "CBRD-1", "total": N, "comments": [...]}` | (same — listing is a GET) |
 | `comment-update` | `{"issue": "CBRD-1", "comment_id": "42", "updated": true}` | `{"dry_run": true, "requests": [PUT .../comment/42]}` |
@@ -484,7 +492,7 @@ cubrid-jira create \
     --description-file ./bug-notes.md \
     --link-relates CBRD-26517 \
     --output json
-# → {"dry_run": true, "requests": [POST /rest/api/2/issue, POST /rest/api/2/issueLink]}
+# → {"dry_run": true, "requests": [POST /rest/api/2/issue, PUT /rest/api/2/issue/<new-issue-key>, POST /rest/api/2/issueLink]}
 
 # 2) Same command with --yes — actually creates the issue + link.
 KEY=$(cubrid-jira create \

@@ -44,6 +44,15 @@ reparent           <KEY> --to <PARENT>            move a Sub-task between parent
 Full background, traps, and curl-only smoke test:
 `docs/reparent-subtasks-via-convert-wizard.md`.
 
+## Create priority
+
+CBRD's create screen rejects `priority` (400 "not on the appropriate screen"),
+but the edit screen allows it. `create --priority` therefore omits it from the
+POST and sends `PUT /rest/api/2/issue/{key}` with only the priority right
+after, before link requests (dry-run shows both). If that PUT fails, stderr
+names the new key, `--output json` still emits `key` plus `priority_error`,
+links are skipped, and the exit code is the PUT's HTTP-mapped code.
+
 ## Transition resolutions
 
 `transition` fetches `…/transitions?expand=transitions.fields`. If the chosen
