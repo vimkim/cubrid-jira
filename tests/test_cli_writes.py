@@ -145,6 +145,68 @@ def test_create_priority_put_failure_keeps_key_and_exits_nonzero(
     assert [r.method for r in fake_server.requests] == ["POST", "PUT"]
 
 
+def test_create_first_link_failure_reports_key_and_repair_commands(
+    fake_server, tmp_path, capsys, monkeypatch
+):
+    monkeypatch.setenv("CUBRID_JIRA_DIR", str(tmp_path))
+    fake_server.route("POST", "/rest/api/2/issue", response={"id": "1", "key": "CBRD-999"})
+    fake_server.route("POST", "/rest/api/2/issueLink", raise_=make_http_error(400))
+    with pytest.raises(SystemExit) as exc:
+        main([
+            "create", "--project", "CBRD", "--type", "Task", "--summary", "t",
+            "--link-relates", "CBRD-1", "--link-blocks", "CBRD-2", "--yes",
+        ])
+    assert exc.value.code == 5
+    err = capsys.readouterr().err
+    assert "CBRD-999" in err
+    assert "http://jira.cubrid.org/browse/CBRD-999" in err
+    assert "cubrid-jira link CBRD-999 --type Relates --to CBRD-1 --yes" in err
+    assert "cubrid-jira link CBRD-999 --type Blocks --to CBRD-2 --yes" in err
+    assert [(r.method, r.url.rsplit("/", 1)[-1]) for r in fake_server.requests] == [
+        ("POST", "issue"), ("POST", "issueLink"),
+    ]
+
+
+def test_create_second_link_failure_json_keeps_key_and_lists_links(
+    fake_server, tmp_path, capsys, monkeypatch
+):
+    import urllib.request
+
+    monkeypatch.setenv("CUBRID_JIRA_DIR", str(tmp_path))
+    fake_server.route("POST", "/rest/api/2/issue", response={"id": "1", "key": "CBRD-999"})
+    fake_server.route("POST", "/rest/api/2/issueLink", response={})
+
+    def urlopen(req, timeout=None):
+        resp = fake_server.urlopen(req, timeout)
+        if req.full_url.endswith("/issueLink") and b"CBRD-2" in req.data:
+            raise make_http_error(400)
+        return resp
+
+    monkeypatch.setattr(urllib.request, "urlopen", urlopen)
+    with pytest.raises(SystemExit) as exc:
+        main([
+            "create", "--project", "CBRD", "--type", "Task", "--summary", "t",
+            "--link-relates", "CBRD-1", "--link-blocks", "CBRD-2", "--link-blocks", "CBRD-3",
+            "--yes", "--output", "json",
+        ])
+    assert exc.value.code == 5
+    out = capsys.readouterr()
+    result = json.loads(out.out)
+    assert result["key"] == "CBRD-999"
+    assert result["url"] == "http://jira.cubrid.org/browse/CBRD-999"
+    assert "link_error" in result
+    assert result["links_created"] == [{"type": "Relates", "to": "CBRD-1"}]
+    assert result["links_unsent"] == [
+        {"type": "Blocks", "to": "CBRD-2"}, {"type": "Blocks", "to": "CBRD-3"},
+    ]
+    assert "cubrid-jira link CBRD-999 --type Relates --to CBRD-1" not in out.err
+    assert "cubrid-jira link CBRD-999 --type Blocks --to CBRD-2 --yes" in out.err
+    assert "cubrid-jira link CBRD-999 --type Blocks --to CBRD-3 --yes" in out.err
+    assert [(r.method, r.url.rsplit("/", 1)[-1]) for r in fake_server.requests] == [
+        ("POST", "issue"), ("POST", "issueLink"), ("POST", "issueLink"),
+    ]
+
+
 def test_create_without_priority_sends_no_put(fake_server, tmp_path, capsys, monkeypatch):
     monkeypatch.setenv("CUBRID_JIRA_DIR", str(tmp_path))
     main([
@@ -333,6 +395,9 @@ def test_create_subtask_success_invalidates_parent_despite_followup_failure(
         with pytest.raises(SystemExit) as exc:
             main([*argv, "--link-relates", "CBRD-1"])
         assert exc.value.code == 5
+        out = capsys.readouterr()
+        assert json.loads(out.out)["key"] == "CBRD-999"
+        assert "CBRD-999" in out.err
     else:
         if failure == "refresh":
             fake_server.route(
