@@ -287,6 +287,16 @@ printed to stderr (and returned as `key` plus `priority_error` under
 `--output json`), link requests are skipped, and the command exits with the
 PUT's HTTP-mapped code; fix it with `update <key> --priority NAME --yes`.
 
+Links are sent in order (`--link-relates` first, then `--link-blocks`). If a
+link request fails, the command stops there: no later link, no retry, no cache
+refresh. stderr names the new key and URL, the links already created, and a
+`cubrid-jira link <key> --type TYPE --to OTHER --yes` command for each unsent
+link, the failed one included. Under `--output json` the result keeps
+`key`/`id`/`self`/`url` and adds `link_error`, `links_created`, and
+`links_unsent` (each a list of `{"type", "to"}`). The exit code is the failed
+request's HTTP-mapped code. A priority failure reports the unsent links the
+same way.
+
 **Transition resolutions.** A resolving transition (e.g. `Bug Invalid`, `Check in fix`) carries a `resolution` field on its transition screen. If it is sent without one, JIRA silently applies the screen default (`Fixed`), and the resolution cannot be edited in place afterwards. So when the selected transition has a `resolution` field, `--resolution NAME` (case-insensitive, matched against the allowed names, sent by id) is **required** — even when JIRA marks the field optional. Missing, unknown, or unexpected (`--resolution` on a transition with no resolution field, or without `--to`) values exit 1 with an error that lists the allowed names; this check runs in dry-run too, so the problem shows before `--yes`. Omit `--to` to list transitions with their resolution requirement and allowed names; dry-run shows the resolved name and id.
 
 `update` edits an existing issue's fields. At least one of `--summary`, `--description-file`, `--priority`, `--label`, `--component`, or `--field` is required. **`--label` and `--component` replace the full list** — they are not additive (Jira REST `fields` semantics). `--description-file -` reads from stdin.
@@ -433,7 +443,7 @@ Exactly **one** JSON object on stdout, nothing else. Status/errors still go to s
 
 | Subcommand | Live success shape | Dry-run shape |
 |---|---|---|
-| `create` | `{"key": "CBRD-9999", "url": "..."}` (+ `"priority_error"` and a nonzero exit if the follow-up priority PUT fails) | `{"dry_run": true, "requests": [POST issue, PUT issue (priority), POST issueLink, …]}` |
+| `create` | `{"key": "CBRD-9999", "url": "..."}` (+ `"priority_error"` or `"link_error"`, `"links_created"`, `"links_unsent"`, and a nonzero exit if a follow-up priority PUT or link POST fails) | `{"dry_run": true, "requests": [POST issue, PUT issue (priority), POST issueLink, …]}` |
 | `comment` | `{"issue": "CBRD-1", "comment_id": "42"}` | `{"dry_run": true, "requests": [POST .../comment]}` |
 | `comment-list` | `{"issue": "CBRD-1", "total": N, "comments": [...]}` | (same — listing is a GET) |
 | `comment-update` | `{"issue": "CBRD-1", "comment_id": "42", "updated": true}` | `{"dry_run": true, "requests": [PUT .../comment/42]}` |

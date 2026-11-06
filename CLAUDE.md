@@ -53,6 +53,17 @@ after, before link requests (dry-run shows both). If that PUT fails, stderr
 names the new key, `--output json` still emits `key` plus `priority_error`,
 links are skipped, and the exit code is the PUT's HTTP-mapped code.
 
+## Create links
+
+Link POSTs run in order (relates, then blocks). The first failure stops the
+command: no later link, no retry, no cache refresh. stderr names the new key,
+the created links, and a `cubrid-jira link <KEY> --type T --to OTHER --yes`
+repair command per unsent link (failed one included). `--output json` keeps
+`key`/`id`/`self`/`url` and adds `link_error`, `links_created`, `links_unsent`
+(lists of `{"type", "to"}`); exit is the failed request's HTTP-mapped code.
+Priority and link failures share `_exit_after_partial_create` in `cli.py`;
+a priority failure lists all requested links as unsent.
+
 ## Transition resolutions
 
 `transition` fetches `…/transitions?expand=transitions.fields`. If the chosen

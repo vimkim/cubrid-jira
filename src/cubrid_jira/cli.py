@@ -23,6 +23,7 @@ import json
 import re
 import sys
 from pathlib import Path
+from typing import NoReturn
 
 from cubrid_jira.auth import resolve_credentials
 from cubrid_jira.cache import (
@@ -656,6 +657,37 @@ def cmd_attachment(args) -> None:
 # create
 # --------------------------------------------------------------------------- #
 
+def _exit_after_partial_create(args, client, resp, err, *, failed, fix, error_field,
+                               request, links_created, links_unsent) -> NoReturn:
+    # The issue exists; never hide it. The client already printed the HTTP
+    # detail. Callers stop at the failed request: no retry, no cache refresh.
+    new_key = resp["key"]
+    code = err.code if isinstance(err, SystemExit) else 1
+    url = f"{args.server.rstrip('/')}/browse/{new_key}"
+    print(f"Error: created {new_key} ({url}) but {failed} failed"
+          + (f"; {fix}." if fix else "."), file=sys.stderr)
+    if links_created:
+        print("Links created: " + ", ".join(
+            f"{new_key} -[{t}]-> {o}" for t, o in links_created), file=sys.stderr)
+    if links_unsent:
+        print("Links not sent; create them with:", file=sys.stderr)
+        for t, o in links_unsent:
+            print(f"  cubrid-jira link {new_key} --type {t} --to {o} --yes",
+                  file=sys.stderr)
+    result = {
+        "key": new_key,
+        "id": resp.get("id"),
+        "self": resp.get("self"),
+        "url": url,
+        error_field: f"{request} failed (exit {code}); see stderr",
+    }
+    if links_created or links_unsent:
+        result["links_created"] = [{"type": t, "to": o} for t, o in links_created]
+        result["links_unsent"] = [{"type": t, "to": o} for t, o in links_unsent]
+    _emit(args, client, result)
+    sys.exit(code)
+
+
 def cmd_create(args) -> None:
     if args.type.casefold() == "sub-task" and args.parent is None:
         print("Error: --type Sub-task requires --parent KEY, e.g. --parent CBRD-27193.",
@@ -700,6 +732,12 @@ def cmd_create(args) -> None:
         custom_fields=custom,
     )
 
+    link_specs: list[tuple[str, str]] = []
+    for k in args.link_relates or []:
+        link_specs.append(("Relates", parse_issue_key(k)))
+    for k in args.link_blocks or []:
+        link_specs.append(("Blocks", parse_issue_key(k)))
+
     resp = client.request("POST", "/rest/api/2/issue", body=payload)
     new_key = (resp or {}).get("key")
     if args.parent is not None and not _is_dry_run(args):
@@ -713,40 +751,35 @@ def cmd_create(args) -> None:
                 body=build_update_payload(priority=args.priority),
             )
         except (SystemExit, JiraError) as e:
-            # The issue exists; never hide it. The client already printed
-            # the HTTP detail. Stop here (no links, no retry) and exit with
-            # the PUT's HTTP-mapped code.
-            code = e.code if isinstance(e, SystemExit) else 1
-            url = f"{args.server.rstrip('/')}/browse/{new_key}"
-            print(f"Error: created {new_key} ({url}) but setting priority "
-                  f"{args.priority!r} failed; set it with "
-                  f"`cubrid-jira update {new_key} --priority {args.priority} --yes`.",
-                  file=sys.stderr)
-            if args.link_relates or args.link_blocks:
-                print("Error: link requests were not sent.", file=sys.stderr)
-            _emit(args, client, {
-                "key": new_key,
-                "id": (resp or {}).get("id"),
-                "self": (resp or {}).get("self"),
-                "url": url,
-                "priority_error": f"PUT /rest/api/2/issue/{new_key} failed "
-                                  f"(exit {code}); see stderr",
-            })
-            sys.exit(code)
+            _exit_after_partial_create(
+                args, client, resp, e,
+                failed=f"setting priority {args.priority!r}",
+                fix=f"set it with `cubrid-jira update {new_key} "
+                    f"--priority {args.priority} --yes`",
+                error_field="priority_error",
+                request=f"PUT /rest/api/2/issue/{new_key}",
+                links_created=[], links_unsent=link_specs,
+            )
 
-    link_specs: list[tuple[str, str]] = []
-    for k in args.link_relates or []:
-        link_specs.append(("Relates", parse_issue_key(k)))
-    for k in args.link_blocks or []:
-        link_specs.append(("Blocks", parse_issue_key(k)))
-
-    for link_type, other_key in link_specs:
+    for i, (link_type, other_key) in enumerate(link_specs):
         src = new_key or "<new-issue-key>"
-        client.request(
-            "POST",
-            "/rest/api/2/issueLink",
-            body=build_link_payload(link_type, src, other_key),
-        )
+        try:
+            client.request(
+                "POST",
+                "/rest/api/2/issueLink",
+                body=build_link_payload(link_type, src, other_key),
+            )
+        except (SystemExit, JiraError) as e:
+            if not new_key:
+                raise
+            _exit_after_partial_create(
+                args, client, resp, e,
+                failed=f"link {new_key} -[{link_type}]-> {other_key}",
+                fix=None,
+                error_field="link_error",
+                request="POST /rest/api/2/issueLink",
+                links_created=link_specs[:i], links_unsent=link_specs[i:],
+            )
 
     if _is_dry_run(args):
         _emit(args, client, None)
