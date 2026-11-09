@@ -640,3 +640,31 @@ def test_convert_to_issue_xsrf_rejection_is_an_error_line(
     err = capsys.readouterr().err
     assert ei.value.code == 1
     assert "Error:" in err and "XSRF" in err
+
+
+def test_reparent_warns_when_the_intermediate_state_is_wrong(
+    fake_server, tmp_path, monkeypatch, capsys
+):
+    code = _reparent_with_meta_states(fake_server, monkeypatch, tmp_path, [
+        _meta_subtask("CBRD-9", "99", parent_key="CBRD-1"),
+        _meta_subtask("CBRD-9", "99", parent_key="CBRD-1"),
+    ])
+
+    err = capsys.readouterr().err
+    assert code == 1
+    assert "ATOMICITY WARNING" in err
+    assert "cubrid-jira search CBRD-9" in err
+
+
+def test_reparent_warns_when_interrupted_in_the_second_half(
+    fake_server, tmp_path, monkeypatch, capsys
+):
+    code = _reparent_with_meta_states(fake_server, monkeypatch, tmp_path, [
+        _meta_subtask("CBRD-9", "99", parent_key="CBRD-1"),
+        _meta_task("CBRD-9", "99"),
+    ], reverse_error=KeyboardInterrupt())
+
+    err = capsys.readouterr().err
+    assert code == 1
+    assert "ATOMICITY WARNING" in err
+    assert RECOVERY in err

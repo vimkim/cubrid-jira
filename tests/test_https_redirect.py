@@ -121,8 +121,9 @@ class _WizardSuccessHandler(BaseHTTPRequestHandler):
         if length:
             self.rfile.read(length)
         if self.path == "/secure/ConvertSubTaskConvert.jspa":
+            port = self.server.server_address[1]
             self.send_response(302)
-            self.send_header("Location", "/browse/CBRD-9")
+            self.send_header("Location", f"http://LOCALHOST:{port}/browse/CBRD-9")
             self.send_header("Content-Length", "0")
             self.end_headers()
             return
@@ -135,13 +136,14 @@ class _WizardSuccessHandler(BaseHTTPRequestHandler):
     do_GET = do_POST = _handle
 
 
-def test_wizard_follows_a_same_origin_redirect(monkeypatch):
+def test_wizard_follows_a_same_origin_redirect_despite_host_case(monkeypatch):
     monkeypatch.setenv("no_proxy", "*")
     monkeypatch.setenv("NO_PROXY", "*")
     server = HTTPServer(("127.0.0.1", 0), _WizardSuccessHandler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     try:
-        session = SessionClient(_base(server), "u", "p", dry_run=False)
+        base = f"http://localhost:{server.server_address[1]}"
+        session = SessionClient(base, "u", "p", dry_run=False)
         html = session.html_post("/secure/ConvertSubTaskConvert.jspa", {"id": "99"})
     finally:
         server.shutdown()
