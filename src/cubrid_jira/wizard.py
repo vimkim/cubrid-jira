@@ -97,10 +97,14 @@ def resolve_issuetype_id(html: str, wanted_name: str) -> str:
     return matches[0]
 
 
+class WizardXsrfError(RuntimeError):
+    """JIRA rejected a wizard step's atl_token."""
+
+
 def check_xsrf(html: str) -> None:
     """JIRA returns HTTP 200 with this title body when XSRF gate trips."""
     if "XSRF Security Token Missing" in html:
-        raise RuntimeError(
+        raise WizardXsrfError(
             "XSRF rejected — atl_token stale or X-Atlassian-Token header "
             "missing. The conversion did not happen."
         )

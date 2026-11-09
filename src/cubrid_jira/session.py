@@ -55,8 +55,9 @@ class SessionClient:
       ``{"method", "url", "body"}`` shape used by ``JiraClient`` so the
       existing CLI ``_emit`` helper for ``--output json`` works
       unchanged.
-    * On HTTP 401 we exit immediately with code 2, never retrying — Jira
-      Server triggers a CAPTCHA after repeated failed basic-auth.
+    * On HTTP 401 we print the lockout warning and raise
+      :class:`WizardHTTPError` with code 401, never retrying — Jira Server
+      triggers a CAPTCHA after repeated failed basic-auth. ``main()`` exits 2.
     """
 
     def __init__(
@@ -158,7 +159,7 @@ class SessionClient:
                 raw = resp.read()
         except urllib.error.HTTPError as e:
             if e.code == 401:
-                _fail_401()
+                _warn_401()
             body = _read_error_body(e)
             raise WizardHTTPError(e.code, url, body) from e
         except (OSError, http.client.HTTPException) as e:
@@ -212,7 +213,7 @@ def _read_error_body(e: urllib.error.HTTPError) -> str:
         return raw.decode("utf-8", errors="replace")
 
 
-def _fail_401() -> None:
+def _warn_401() -> None:
     print(
         "Error: Auth failed (HTTP 401).\n"
         "  Do NOT retry — Jira Server locks accounts and triggers a CAPTCHA\n"
@@ -221,4 +222,3 @@ def _fail_401() -> None:
         "  CUBRID_JIRA_USER / CUBRID_JIRA_PASSWORD (or your ~/.netrc).",
         file=sys.stderr,
     )
-    sys.exit(2)

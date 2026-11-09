@@ -78,10 +78,10 @@ command once, after a dry run of it.
   JSON result holds `key` and one of `priority_error` or `link_error`, plus
   `links_unsent`. The issue exists. Finish it with the `update` or `link`
   commands that stderr prints. Running `create` again makes a duplicate issue.
-- **`reparent` prints `!!! ATOMICITY WARNING`.** The issue is now a Task with no
-  parent. Run the printed `convert-to-subtask` command. After any other nonzero
-  exit from `reparent --yes`, read the issue with `search` before you act, since
-  some failures skip the warning.
+- **`reparent` prints `!!! ATOMICITY WARNING`.** The issue may now be a Task
+  with no parent. Run the printed `search` command. If the issue is a Task with
+  no parent, run the printed `convert-to-subtask` command once. If the exit
+  code is 2, stop first. The recovery command needs working credentials.
 - **`transition` exits 1 and lists resolution names.** The transition sets a
   resolution, and JIRA cannot change a resolution afterwards. Use the name the
   user gave. If they gave none, show them the list and ask. Pass the name with

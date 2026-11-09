@@ -386,15 +386,19 @@ A dry run never logs in and never contacts a wizard endpoint.
 #### `reparent` is atomic or loud
 
 `reparent` converts the Sub-task to a Task, checks the result, and then
-converts the Task to a Sub-task of `--to`. If the second half fails, the issue
-is left as a Task with no parent. In that case `reparent`:
+converts the Task to a Sub-task of `--to`. If anything fails after the first
+wizard POST, the issue may be left as a Task with no parent. In that case
+`reparent`:
 
-- prints `!!! ATOMICITY WARNING` on stderr with the exact recovery command,
-  `cubrid-jira convert-to-subtask <KEY> --to <NEW> --yes`,
-- exits with code 1, and
-- leaves the cache alone, so the next `search` fetches the real state.
+- prints `!!! ATOMICITY WARNING` on stderr with what it knows about the state,
+  a `cubrid-jira search <KEY> --no-recurse` command to check it, and the
+  recovery command, `cubrid-jira convert-to-subtask <KEY> --to <NEW> --yes`,
+- exits with code 2 if the cause was an HTTP 401, and 1 otherwise, and
+- deletes the cached Markdown of the three issues once every wizard step was
+  sent.
 
-Run the recovery command once. Do not retry `reparent` in a loop.
+Read the issue first. If it is a Task with no parent, run the recovery command
+once. Do not retry `reparent` in a loop.
 
 ## Cache effects
 

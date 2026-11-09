@@ -92,11 +92,8 @@ issue that fails, unless the failure is a 401. Three cases need care:
 
 - `attachment` finds the issue through a JQL query, so a missing key is an
   HTTP 400 and exits 5.
-- When a wizard step in the second half of `reparent` fails, the command
-  prints the atomicity warning and exits 1. A 401 in the second half, or a
-  failed read of the issue between or after the halves, exits with its own
-  code and no warning. After any nonzero
-  exit from `reparent --yes`, read the issue with `search` before you retry.
+- When anything fails after the first wizard POST of `reparent`, the command
+  prints the atomicity warning and exits 1, or 2 if the cause was a 401.
 - Dry runs of `comment`, `comment-update`, `comment-delete`, `link`, `assign`,
   and `update` send no request, so they exit 0 for a key that does not exist.
   Dry runs of `transition` and the structural writes read the issue first and
@@ -114,8 +111,9 @@ structural writes get no retry and no redirect check.
   CLI does not follow it, because `urllib` turns a redirected POST into a GET
   that looks like success. The error names the redirect target and the
   `--server` value to rerun with.
-- When the wizard rejects a stale `atl_token`, the command exits with code 1
-  and names the step that failed.
+- When the wizard rejects a stale `atl_token`, the command prints an
+  `XSRF rejected` error and exits with code 1. In `reparent`, the atomicity
+  warning reports it.
 
 ## 401 and the CAPTCHA lockout
 

@@ -32,10 +32,12 @@ reparent           <KEY> --to <PARENT>            move a Sub-task between parent
 ```
 
 - Dry-run is the default; `--yes` performs the live wizard sequence.
-- `reparent` is atomic-or-loud: if the reverse half fails after the forward
-  half succeeded, the issue is left as a Task with no parent — the command
-  prints a `!!! ATOMICITY WARNING` with the exact recovery command and
-  exits 1. Do **not** silently retry.
+- `reparent` is atomic-or-loud: any failure after the first wizard POST may
+  leave the issue as a Task with no parent, so the command prints a
+  `!!! ATOMICITY WARNING` with a `search` check and the exact recovery command,
+  then exits 1 (2 when the cause is a 401). Every such path goes through
+  `_reparent_warning`; `_fetch_meta` and the wizard raise instead of calling
+  `sys.exit` so the warning cannot be skipped. Do **not** silently retry.
 - Issuetype IDs (Sub-task / Task) are resolved from the wizard page's
   `<select name="issuetype">` at runtime, not hard-coded.
 - Cache invalidation: convert-* invalidates 2 keys (issue + the other parent),

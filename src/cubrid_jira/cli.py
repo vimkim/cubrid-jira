@@ -71,6 +71,7 @@ from cubrid_jira.wizard import (
     build_subtask_step1,
     build_subtask_step3,
     build_subtask_step4,
+    WizardXsrfError,
     check_xsrf,
     parse_form,
     resolve_issuetype_id,
@@ -1244,16 +1245,13 @@ def _fetch_meta(
 ) -> tuple[str, str, str | None]:
     """Return ``(issue_id, issuetype_name, parent_key_or_None)`` for ``key``.
 
-    A failed fetch exits with the HTTP status mapped by the exit-code
-    contract (401 -> 2, 403 -> 3, 404 -> 4, other -> 1).
+    Raises :class:`JiraError` on a failed fetch. ``main()`` maps it to the
+    exit-code contract; ``reparent`` catches it first after its first wizard
+    POST so it can print the atomicity warning.
     """
-    try:
-        data = fetch_issue(key, server=server)
-    except JiraError as e:
-        print(f"Error: {e}", file=sys.stderr)
-        sys.exit(exit_code_for_http(e.code))
+    data = fetch_issue(key, server=server)
     if not data:
-        sys.exit(4)
+        raise JiraError(f"Failed to fetch {key}: empty response")
     issue_id = str(data.get("id", ""))
     fields = data.get("fields") or {}
     cur_type = (fields.get("issuetype") or {}).get("name") or ""
@@ -1424,6 +1422,29 @@ def cmd_convert_to_subtask(args) -> None:
     })
 
 
+def _reparent_warning(
+    args, key: str, new_parent_key: str, state: str, cause: BaseException,
+) -> NoReturn:
+    """Report a reparent that may have changed the issue, then exit.
+
+    Exits 2 when the cause is a 401, so callers still stop instead of
+    retrying with rejected credentials, and 1 otherwise.
+    """
+    server = args.server
+    print(
+        "\n!!! ATOMICITY WARNING: reparent did not finish.\n"
+        f"!!! {state}\n"
+        f"!!! Check it: cubrid-jira search {key} --no-recurse --server {server}\n"
+        f"!!! If it is a Task with no parent, convert it to a Sub-task of "
+        f"{new_parent_key} at {server.rstrip('/')}/browse/{key}, or run:\n"
+        f"!!!   cubrid-jira convert-to-subtask {key} --to {new_parent_key} "
+        f"--server {server} --yes\n"
+        f"!!! Cause: {cause}",
+        file=sys.stderr,
+    )
+    sys.exit(2 if getattr(cause, "code", None) == 401 else 1)
+
+
 def cmd_reparent(args) -> None:
     if not (args.to or "").strip():
         print("Error: --to <PARENT> is required and must be non-empty.",
@@ -1493,9 +1514,14 @@ def cmd_reparent(args) -> None:
     except ValueError as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
-    _drive_subtask_to_task(session, issue_id, atl_token, guid, fwd_type)
-
-    _, inter_type, inter_parent = _fetch_meta(key, server=args.server)
+    try:
+        _drive_subtask_to_task(session, issue_id, atl_token, guid, fwd_type)
+        _, inter_type, inter_parent = _fetch_meta(key, server=args.server)
+    except Exception as exc:
+        _reparent_warning(
+            args, key, new_parent_key,
+            f"{key} may now be a Task with no parent.", exc,
+        )
     if inter_type != intermediate_type or inter_parent is not None:
         print(
             f"!!! WARNING: forward conversion of {key} did NOT land in "
@@ -1525,31 +1551,34 @@ def cmd_reparent(args) -> None:
             rev_type,
             new_parent_key,
         )
-        _, final_type, final_parent = _fetch_meta(key, server=args.server)
-        if final_type != target_type or final_parent != new_parent_key:
-            raise RuntimeError(
-                f"final state after reverse conversion: "
-                f"type={final_type!r}, parent={final_parent!r}"
-            )
     except Exception as exc:
-        print(
-            "\n!!! ATOMICITY WARNING: reparent FAILED after the forward "
-            "conversion succeeded.\n"
-            f"!!! {key} is now a Task with no parent and needs recovery.\n"
-            f"!!! Open {args.server.rstrip('/')}/browse/{key} and either:\n"
-            f"!!!   - Convert to Sub-task of {new_parent_key} via the web UI, or\n"
-            f"!!!   - Re-run: cubrid-jira convert-to-subtask {key} "
-            f"--to {new_parent_key} --server {args.server} --yes\n"
-            f"!!! Cause: {exc}",
-            file=sys.stderr,
+        _reparent_warning(
+            args, key, new_parent_key,
+            f"{key} is now a Task with no parent and needs recovery.", exc,
         )
-        sys.exit(1)
 
     cache_dir = resolve_cache_dir(args.dir, server=args.server)
-    invalidate(key, cache_dir)
-    if cur_parent:
-        invalidate(cur_parent, cache_dir)
-    invalidate(new_parent_key, cache_dir)
+    for touched in (key, cur_parent, new_parent_key):
+        if touched:
+            invalidate(touched, cache_dir)
+
+    try:
+        _, final_type, final_parent = _fetch_meta(key, server=args.server)
+    except Exception as exc:
+        _reparent_warning(
+            args, key, new_parent_key,
+            f"Every wizard step was sent, but the final state of {key} "
+            "could not be read.", exc,
+        )
+    if final_type != target_type or final_parent != new_parent_key:
+        _reparent_warning(
+            args, key, new_parent_key,
+            f"{key} is now a Task with no parent and needs recovery.",
+            RuntimeError(
+                f"final state after reverse conversion: "
+                f"type={final_type!r}, parent={final_parent!r}"
+            ),
+        )
 
     if _output_format(args) == "text":
         old = cur_parent or "(none)"
@@ -1959,9 +1988,12 @@ def main(argv: list[str] | None = None) -> None:
     except IssueKeyError as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
-    except WizardHTTPError as e:
+    except (JiraError, WizardHTTPError) as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(exit_code_for_http(e.code))
+    except WizardXsrfError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
 
 
 if __name__ == "__main__":
