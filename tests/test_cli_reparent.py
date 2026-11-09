@@ -525,3 +525,118 @@ def _stub_response(payload):
     if isinstance(payload, bytes):
         return _R(payload)
     return _R(str(payload).encode("utf-8"))
+
+
+# --------------------------------------------------------------------------- #
+# Every failure after the first wizard POST must warn and name the recovery.
+# --------------------------------------------------------------------------- #
+
+RECOVERY = "convert-to-subtask CBRD-9 --to CBRD-2 --server https://jira.cubrid.org --yes"
+
+
+def _reparent_with_meta_states(fake_server, monkeypatch, tmp_path, states, *,
+                               reverse_error=None):
+    monkeypatch.setenv("CUBRID_JIRA_DIR", str(tmp_path))
+    for key in ("CBRD-9", "CBRD-1", "CBRD-2"):
+        (tmp_path / f"{key}.md").write_text("stale")
+    _route_wizard_warmup_and_login(fake_server)
+    fake_server.route("GET", "/rest/api/2/issue/CBRD-2?expand=renderedFields",
+                      response=_meta_task("CBRD-2", "200"))
+    fake_server.route("GET", "/secure/ConvertSubTask.jspa?id=99",
+                      response=WIZARD_PAGE_HTML)
+    fake_server.route("GET", "/secure/ConvertIssue.jspa?id=99",
+                      response=WIZARD_PAGE_HTML_FOR_SUBTASK)
+    _route_forward_wizard_steps(fake_server)
+    if reverse_error is not None:
+        fake_server.route("POST", "/secure/ConvertIssueSetIssueType.jspa",
+                          raise_=reverse_error)
+    _route_reverse_wizard_steps(fake_server)
+
+    states = iter(states)
+    real = fake_server.urlopen
+
+    def _wrapped(req, timeout=None):
+        if req.full_url.endswith("/rest/api/2/issue/CBRD-9?expand=renderedFields"):
+            item = next(states)
+            if isinstance(item, Exception):
+                raise item
+            return _stub_response(item)
+        return real(req, timeout=timeout)
+
+    monkeypatch.setattr("urllib.request.urlopen", _wrapped)
+    with pytest.raises(SystemExit) as ei:
+        main(["reparent", "CBRD-9", "--to", "CBRD-2", "--yes"])
+    return ei.value.code
+
+
+def test_reparent_warns_when_the_intermediate_read_fails(
+    fake_server, tmp_path, monkeypatch, capsys
+):
+    from conftest import make_http_error
+
+    code = _reparent_with_meta_states(fake_server, monkeypatch, tmp_path, [
+        _meta_subtask("CBRD-9", "99", parent_key="CBRD-1"),
+        make_http_error(404),
+    ])
+
+    err = capsys.readouterr().err
+    assert code == 1
+    assert "ATOMICITY WARNING" in err
+    assert "cubrid-jira search CBRD-9" in err
+    assert RECOVERY in err
+
+
+def test_reparent_warns_and_exits_2_on_a_401_in_the_second_half(
+    fake_server, tmp_path, monkeypatch, capsys
+):
+    from conftest import make_http_error
+
+    code = _reparent_with_meta_states(fake_server, monkeypatch, tmp_path, [
+        _meta_subtask("CBRD-9", "99", parent_key="CBRD-1"),
+        _meta_task("CBRD-9", "99"),
+    ], reverse_error=make_http_error(401))
+
+    err = capsys.readouterr().err
+    assert code == 2
+    assert "ATOMICITY WARNING" in err
+    assert "Task with no parent" in err
+    assert RECOVERY in err
+
+
+def test_reparent_warns_and_invalidates_when_the_final_read_fails(
+    fake_server, tmp_path, monkeypatch, capsys
+):
+    from conftest import make_http_error
+
+    code = _reparent_with_meta_states(fake_server, monkeypatch, tmp_path, [
+        _meta_subtask("CBRD-9", "99", parent_key="CBRD-1"),
+        _meta_task("CBRD-9", "99"),
+        make_http_error(500),
+    ])
+
+    err = capsys.readouterr().err
+    assert code == 1
+    assert "ATOMICITY WARNING" in err
+    assert "cubrid-jira search CBRD-9" in err
+    for key in ("CBRD-9", "CBRD-1", "CBRD-2"):
+        assert not (tmp_path / f"{key}.md").exists(), key
+
+
+def test_convert_to_issue_xsrf_rejection_is_an_error_line(
+    fake_server, tmp_path, monkeypatch, capsys
+):
+    monkeypatch.setenv("CUBRID_JIRA_DIR", str(tmp_path))
+    _route_wizard_warmup_and_login(fake_server)
+    _route_meta(fake_server, "CBRD-9", _meta_subtask("CBRD-9", "99"))
+    fake_server.route("GET", "/secure/ConvertSubTask.jspa?id=99",
+                      response=WIZARD_PAGE_HTML)
+    _route_forward_wizard_steps(
+        fake_server, ok_html="<title>XSRF Security Token Missing</title>"
+    )
+
+    with pytest.raises(SystemExit) as ei:
+        main(["convert-to-issue", "CBRD-9", "--yes"])
+
+    err = capsys.readouterr().err
+    assert ei.value.code == 1
+    assert "Error:" in err and "XSRF" in err
