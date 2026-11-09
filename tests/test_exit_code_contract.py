@@ -118,3 +118,38 @@ def test_legacy_fetch_maps_a_missing_requested_issue_to_4(
         bulk_fetch_main()
 
     assert ei.value.code == 4
+
+
+WIZARD_PAGE = """
+<form name="jiraform" action="/secure/ConvertSubTaskSetIssueType.jspa">
+  <input type="hidden" name="atl_token" value="TOK-1"/>
+  <input type="hidden" name="guid" value="GUID-1"/>
+  <select name="issuetype"><option value="10500">Task</option></select>
+</form>
+"""
+
+
+@pytest.mark.parametrize("status, code", [(400, 5), (403, 3), (404, 4), (500, 1)])
+def test_wizard_http_error_exits_with_the_mapped_code(
+    status, code, fake_server, tmp_path, monkeypatch, capsys
+):
+    monkeypatch.setenv("CUBRID_JIRA_DIR", str(tmp_path))
+    fake_server.route("GET", "/secure/Dashboard.jspa", response=b"")
+    fake_server.route(
+        "POST", "/rest/auth/1/session",
+        response={"session": {"name": "JSESSIONID", "value": "X"}},
+    )
+    _route_issue(fake_server, "CBRD-9", response=_issue("CBRD-9", "s"))
+    fake_server.route("GET", "/secure/ConvertSubTask.jspa?id=100", response=WIZARD_PAGE)
+    fake_server.route(
+        "POST", "/secure/ConvertSubTaskSetIssueType.jspa",
+        raise_=make_http_error(status, "wizard said no"),
+    )
+
+    with pytest.raises(SystemExit) as ei:
+        main(["convert-to-issue", "CBRD-9", "--yes"])
+
+    err = capsys.readouterr().err
+    assert ei.value.code == code
+    assert "Error:" in err and f"HTTP {status}" in err
+    assert "Traceback" not in err
