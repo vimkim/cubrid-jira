@@ -17,7 +17,7 @@ credentials  CUBRID_JIRA_USER + CUBRID_JIRA_PASSWORD, else ~/.netrc. No prompt.
              Every other command needs them, dry runs included.
 stdout       the result. With --output json: exactly one JSON object.
 stderr       progress, dry-run banners, warnings, errors
-exit         0 ok | 1 generic | 2 HTTP 401 | 3 HTTP 403 | 4 HTTP 404 | 5 HTTP 400
+exit         0 ok | 1 generic | 2 HTTP 401 or usage error | 3 HTTP 403 | 4 HTTP 404 | 5 HTTP 400
 server       https://jira.cubrid.org by default (CBRD, CUBRIDQA).
              RND issues: --server http://jira.cubrid.com. The key prefix does not pick the server.
 ```
@@ -45,7 +45,8 @@ cubrid-jira search CBRD-XXXXX --no-recurse
 
 ## Stop at the first 401
 
-Exit code 2 means JIRA rejected the credentials. Report the error to the user
+Exit code 2 without a `usage:` line on stderr means JIRA rejected the
+credentials. Report the error to the user
 and stop. JIRA Server counts every failed basic-auth request against the
 account and locks it behind a web CAPTCHA after a few, so a second attempt, a
 retry loop, or another command with the same credentials makes it worse. The
@@ -57,7 +58,7 @@ user fixes the credentials. You run the command again only after they say so.
 |---|---|
 | 0 | Continue. |
 | 1 | Read stderr. It names the bad input, the refused redirect and the `--server` to use, or the recovery command. |
-| 2 | Stop. See [Stop at the first 401](#stop-at-the-first-401). |
+| 2 | If stderr starts with `usage:`, the arguments are wrong. Fix them. Otherwise stop. See [Stop at the first 401](#stop-at-the-first-401). |
 | 3 | Report that the account lacks permission. |
 | 4 | Check the key and the server. An `RND` key on the default server is not found. |
 | 5 | JIRA rejected a field or a query. stderr holds JIRA's error messages. Fix the value and repeat the dry run. |

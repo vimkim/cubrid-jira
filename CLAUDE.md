@@ -16,7 +16,7 @@ output (stdout)     markdown or JSON
 output (stderr)     status + errors
 machine-readable    add `--output json` to write subcommands or to `jql`
                     → exactly one JSON object on stdout
-exit codes          0 ok | 1 generic | 2 401 | 3 403 | 4 404 | 5 400
+exit codes          0 ok | 1 generic | 2 401 or argparse usage error | 3 403 | 4 404 | 5 400
 ```
 
 ## Structural writes — convert / reparent

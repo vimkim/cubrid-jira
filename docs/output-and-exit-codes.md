@@ -81,7 +81,7 @@ command per unsent request.
 |---|---|---|
 | 0 | Success, or the dry run finished. | |
 | 1 | Generic error: bad input, a parse failure, network errors after the retry, a refused redirect, a stale wizard token, or the `reparent` atomicity warning. | Read stderr. For `reparent`, run the recovery command it prints. |
-| 2 | HTTP 401, authentication failed. | Stop. Do not retry. See [401 and the CAPTCHA lockout](#401-and-the-captcha-lockout). |
+| 2 | HTTP 401, authentication failed. A command-line usage error also exits 2, and its stderr starts with `usage:`. | For a usage error, fix the arguments. Otherwise stop and do not retry. See [401 and the CAPTCHA lockout](#401-and-the-captcha-lockout). |
 | 3 | HTTP 403. The account lacks permission. | Ask a JIRA admin or use another account. |
 | 4 | HTTP 404. The issue or resource does not exist. | Check the key and the `--server`. |
 | 5 | HTTP 400. JIRA rejected the request. stderr prints JIRA's `errors` and `errorMessages`. | Fix the field values. A malformed JQL query also exits 5. |
