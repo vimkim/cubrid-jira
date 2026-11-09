@@ -393,9 +393,10 @@ wizard POST, the issue may be left as a Task with no parent. In that case
 - prints `!!! ATOMICITY WARNING` on stderr with what it knows about the state,
   a `cubrid-jira search <KEY> --no-recurse` command to check it, and the
   recovery command, `cubrid-jira convert-to-subtask <KEY> --to <NEW> --yes`,
-- exits with code 2 if the cause was an HTTP 401, and 1 otherwise, and
-- deletes the cached Markdown of the three issues once every wizard step was
-  sent.
+- exits with code 2 if the cause was an HTTP 401, and with code 1 for any
+  other cause, Ctrl-C included, and
+- leaves the cache alone. The `search` command in the warning fetches the real
+  state and refreshes the cache.
 
 Read the issue first. If it is a Task with no parent, run the recovery command
 once. Do not retry `reparent` in a loop.
@@ -411,7 +412,7 @@ once. Do not retry `reparent` in a loop.
 | `comment`, `comment-update`, `comment-delete`, `transition`, `assign`, `update` | Deletes the issue's cached Markdown, so the next `search` fetches it. |
 | `link` | Deletes the cached Markdown of both issues. |
 | `convert-to-issue`, `convert-to-subtask` | Deletes two entries. See the table in [Structural writes](#structural-writes). |
-| `reparent` | Deletes three entries, unless the second half fails. |
+| `reparent` | Deletes three entries, unless it prints the atomicity warning. |
 
 ## Deprecated binaries
 

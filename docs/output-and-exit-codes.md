@@ -80,7 +80,7 @@ command per unsent request.
 | Code | Meaning | What to do |
 |---|---|---|
 | 0 | Success, or the dry run finished. | |
-| 1 | Generic error: bad input, a parse failure, network errors after the retry, a refused redirect, a stale wizard token, or the `reparent` atomicity warning. | Read stderr. For `reparent`, run the recovery command it prints. |
+| 1 | Generic error: bad input, a parse failure, network errors after the retry, a refused redirect, a stale wizard token, or the `reparent` atomicity warning. | Read stderr. For a `reparent` atomicity warning, read the issue with the `search` command it prints, then run its recovery command if the issue is a Task with no parent. |
 | 2 | HTTP 401, authentication failed. A command-line usage error also exits 2 and prints a `usage:` line on stderr. | For a usage error, fix the arguments. Otherwise stop and do not retry. See [401 and the CAPTCHA lockout](#401-and-the-captcha-lockout). |
 | 3 | HTTP 403. The account lacks permission. | Ask a JIRA admin or use another account. |
 | 4 | HTTP 404. The issue or resource does not exist. | Check the key and the `--server`. |

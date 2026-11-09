@@ -603,7 +603,7 @@ def test_reparent_warns_and_exits_2_on_a_401_in_the_second_half(
     assert RECOVERY in err
 
 
-def test_reparent_warns_and_invalidates_when_the_final_read_fails(
+def test_reparent_warns_when_the_final_read_fails(
     fake_server, tmp_path, monkeypatch, capsys
 ):
     from conftest import make_http_error
@@ -618,8 +618,6 @@ def test_reparent_warns_and_invalidates_when_the_final_read_fails(
     assert code == 1
     assert "ATOMICITY WARNING" in err
     assert "cubrid-jira search CBRD-9" in err
-    for key in ("CBRD-9", "CBRD-1", "CBRD-2"):
-        assert not (tmp_path / f"{key}.md").exists(), key
 
 
 def test_convert_to_issue_xsrf_rejection_is_an_error_line(

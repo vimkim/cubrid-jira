@@ -1517,21 +1517,20 @@ def cmd_reparent(args) -> None:
     try:
         _drive_subtask_to_task(session, issue_id, atl_token, guid, fwd_type)
         _, inter_type, inter_parent = _fetch_meta(key, server=args.server)
-    except Exception as exc:
+    except (Exception, KeyboardInterrupt) as exc:
         _reparent_warning(
             args, key, new_parent_key,
             f"{key} may now be a Task with no parent.", exc,
         )
     if inter_type != intermediate_type or inter_parent is not None:
-        print(
-            f"!!! WARNING: forward conversion of {key} did NOT land in "
-            f"the expected intermediate state.\n"
-            f"!!!   wanted type={intermediate_type!r}, parent=(none)\n"
-            f"!!!   got    type={inter_type!r}, parent={inter_parent!r}\n"
-            f"!!! Reverse step not attempted. Halting.",
-            file=sys.stderr,
+        _reparent_warning(
+            args, key, new_parent_key,
+            f"The first half did not leave {key} as a Task with no parent, so "
+            "the second half was not attempted.",
+            RuntimeError(
+                f"intermediate state: type={inter_type!r}, parent={inter_parent!r}"
+            ),
         )
-        sys.exit(1)
 
     # --- ATOMICITY BOUNDARY ------------------------------------------- #
     # From here on, any failure leaves the issue as a Task with no parent.
@@ -1551,20 +1550,15 @@ def cmd_reparent(args) -> None:
             rev_type,
             new_parent_key,
         )
-    except Exception as exc:
+    except (Exception, KeyboardInterrupt) as exc:
         _reparent_warning(
             args, key, new_parent_key,
             f"{key} is now a Task with no parent and needs recovery.", exc,
         )
 
-    cache_dir = resolve_cache_dir(args.dir, server=args.server)
-    for touched in (key, cur_parent, new_parent_key):
-        if touched:
-            invalidate(touched, cache_dir)
-
     try:
         _, final_type, final_parent = _fetch_meta(key, server=args.server)
-    except Exception as exc:
+    except (Exception, KeyboardInterrupt) as exc:
         _reparent_warning(
             args, key, new_parent_key,
             f"Every wizard step was sent, but the final state of {key} "
@@ -1579,6 +1573,11 @@ def cmd_reparent(args) -> None:
                 f"type={final_type!r}, parent={final_parent!r}"
             ),
         )
+
+    cache_dir = resolve_cache_dir(args.dir, server=args.server)
+    for touched in (key, cur_parent, new_parent_key):
+        if touched:
+            invalidate(touched, cache_dir)
 
     if _output_format(args) == "text":
         old = cur_parent or "(none)"

@@ -47,9 +47,13 @@ class WizardRedirectError(RuntimeError):
     """A wizard request was redirected to another scheme or host."""
 
 
-def _origin(url: str) -> tuple[str, str]:
+_DEFAULT_PORTS = {"http": 80, "https": 443}
+
+
+def _origin(url: str) -> tuple[str, str, int | None]:
     parts = urllib.parse.urlsplit(url)
-    return parts.scheme, parts.netloc
+    scheme = parts.scheme.lower()
+    return scheme, (parts.hostname or ""), parts.port or _DEFAULT_PORTS.get(scheme)
 
 
 class SessionClient:
@@ -168,11 +172,12 @@ class SessionClient:
                 if _origin(final) != _origin(url):
                     # urllib turned the request into a GET at the new origin,
                     # so a wizard step there would look like success.
-                    scheme, netloc = _origin(final)
+                    target = urllib.parse.urlsplit(final)
                     raise WizardRedirectError(
                         f"{method.upper()} {url} was redirected to {final}. "
-                        "Nothing was written. Rerun with "
-                        f"--server {scheme}://{netloc}"
+                        "The wizard does not follow a redirect to another "
+                        "server, so this step may not have taken effect. "
+                        f"Rerun with --server {target.scheme}://{target.netloc}"
                     )
                 _safe_extract_cookies(self.cookies, resp, req)
                 raw = resp.read()
