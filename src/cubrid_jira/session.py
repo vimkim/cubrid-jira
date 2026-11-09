@@ -18,6 +18,7 @@ monkeypatches of ``urllib.request.urlopen`` still intercept every call.
 
 from __future__ import annotations
 
+import http.client
 import json
 import sys
 import urllib.error
@@ -160,7 +161,7 @@ class SessionClient:
                 _fail_401()
             body = _read_error_body(e)
             raise WizardHTTPError(e.code, url, body) from e
-        except urllib.error.URLError as e:
+        except (OSError, http.client.HTTPException) as e:
             raise WizardHTTPError(0, url, str(getattr(e, "reason", e))) from e
         if not raw:
             return ""

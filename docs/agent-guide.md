@@ -58,7 +58,7 @@ user fixes the credentials. You run the command again only after they say so.
 |---|---|
 | 0 | Continue. |
 | 1 | Read stderr. It names the bad input, the refused redirect and the `--server` to use, or the recovery command. |
-| 2 | If stderr starts with `usage:`, the arguments are wrong. Fix them. Otherwise stop. See [Stop at the first 401](#stop-at-the-first-401). |
+| 2 | If stderr has a `usage:` line, the arguments are wrong. Fix them. Otherwise stop. See [Stop at the first 401](#stop-at-the-first-401). |
 | 3 | Report that the account lacks permission. |
 | 4 | Check the key and the server. An `RND` key on the default server is not found. |
 | 5 | JIRA rejected a field or a query. stderr holds JIRA's error messages. Fix the value and repeat the dry run. |

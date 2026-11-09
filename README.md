@@ -115,7 +115,7 @@ cubrid-jira comment CBRD-XXXXX --body-file note.md --yes
   first HTTP 401 and never retries.
 - **Results and noise stay apart.** stdout carries only the result. Progress
   and errors go to stderr. Exit codes 2, 3, 4, and 5 stand for HTTP 401, 403,
-  404, and 400.
+  404, and 400. A usage error also exits 2.
 - **Partial failures say how to finish.** If `create` makes the issue but a
   link request fails, stderr prints the new key and the exact `link` command
   that completes the job.

@@ -81,7 +81,7 @@ command per unsent request.
 |---|---|---|
 | 0 | Success, or the dry run finished. | |
 | 1 | Generic error: bad input, a parse failure, network errors after the retry, a refused redirect, a stale wizard token, or the `reparent` atomicity warning. | Read stderr. For `reparent`, run the recovery command it prints. |
-| 2 | HTTP 401, authentication failed. A command-line usage error also exits 2, and its stderr starts with `usage:`. | For a usage error, fix the arguments. Otherwise stop and do not retry. See [401 and the CAPTCHA lockout](#401-and-the-captcha-lockout). |
+| 2 | HTTP 401, authentication failed. A command-line usage error also exits 2 and prints a `usage:` line on stderr. | For a usage error, fix the arguments. Otherwise stop and do not retry. See [401 and the CAPTCHA lockout](#401-and-the-captcha-lockout). |
 | 3 | HTTP 403. The account lacks permission. | Ask a JIRA admin or use another account. |
 | 4 | HTTP 404. The issue or resource does not exist. | Check the key and the `--server`. |
 | 5 | HTTP 400. JIRA rejected the request. stderr prints JIRA's `errors` and `errorMessages`. | Fix the field values. A malformed JQL query also exits 5. |
@@ -93,8 +93,9 @@ issue that fails, unless the failure is a 401. Three cases need care:
 - `attachment` finds the issue through a JQL query, so a missing key is an
   HTTP 400 and exits 5.
 - When a wizard step in the second half of `reparent` fails, the command
-  prints the atomicity warning and exits 1. A 401 there, or a failed read of
-  the final state, exits with its own code and no warning. After any nonzero
+  prints the atomicity warning and exits 1. A 401 in the second half, or a
+  failed read of the issue between or after the halves, exits with its own
+  code and no warning. After any nonzero
   exit from `reparent --yes`, read the issue with `search` before you retry.
 - Dry runs of `comment`, `comment-update`, `comment-delete`, `link`, `assign`,
   and `update` send no request, so they exit 0 for a key that does not exist.
