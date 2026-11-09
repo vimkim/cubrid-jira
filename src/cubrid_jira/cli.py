@@ -1244,9 +1244,8 @@ def _fetch_meta(
 ) -> tuple[str, str, str | None]:
     """Return ``(issue_id, issuetype_name, parent_key_or_None)`` for ``key``.
 
-    A 401 exits 2 per the exit-code contract (never "not found"). On any
-    other fetch failure the helper exits 4 — ``fetch_issue`` already printed
-    the underlying HTTP/network reason to stderr.
+    A failed fetch exits with the HTTP status mapped by the exit-code
+    contract (401 -> 2, 403 -> 3, 404 -> 4, other -> 1).
     """
     try:
         data = fetch_issue(key, server=server)

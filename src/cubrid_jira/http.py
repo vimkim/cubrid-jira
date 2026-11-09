@@ -93,14 +93,12 @@ def fetch_issue(key: str, *, server: str = DEFAULT_SERVER) -> dict:
     anonymously. When a credential resolves (env or ``~/.netrc``) it is sent so
     login-required projects (e.g. ``CUBRIDQA``) are readable too.
 
-    A 401 raises :class:`JiraError` (code=401) instead of being swallowed:
-    recursive callers (``walk.fetch_recursive``) would otherwise re-send the
-    same rejected credential once per related issue — several failed
-    basic-auth attempts from a single command, which is what triggers the
-    Jira Server CAPTCHA account lockout. Failing fast keeps it to one attempt
-    per run and lets the CLI honor the exit-code contract (401 → 2). Other
-    HTTP errors keep the swallow-and-continue behavior — a 404/403 on one
-    related issue must not abort the whole walk, and carries no lockout risk.
+    Every failure raises :class:`JiraError` with the HTTP ``code`` (``None``
+    for a network or decoding error), so the CLI can honor the exit-code
+    contract. Skipping a related issue that fails is the walk's decision
+    (``walk.fetch_recursive``), not this function's. A 401 is never skipped:
+    re-sending a rejected credential once per related issue triggers the
+    Jira Server CAPTCHA account lockout.
     """
     base = normalize_server(server)
     url = f"{base}/rest/api/2/issue/{key}?expand=renderedFields"
@@ -116,11 +114,11 @@ def fetch_issue(key: str, *, server: str = DEFAULT_SERVER) -> dict:
                 "reset the CAPTCHA via the web UI if it already triggered.",
                 code=401,
             ) from e
-        print(f"  [HTTP {e.code}] Failed to fetch {key}: {e.reason}", file=sys.stderr)
-        return {}
-    except Exception as e:
-        print(f"  [Error] Failed to fetch {key}: {e}", file=sys.stderr)
-        return {}
+        raise JiraError(
+            f"Failed to fetch {key}: HTTP {e.code} {e.reason}".rstrip(), code=e.code,
+        ) from e
+    except (OSError, ValueError) as e:
+        raise JiraError(f"Failed to fetch {key}: {e}") from e
 
 
 def search_issues(
@@ -139,9 +137,9 @@ def search_issues(
     anonymously), but sends them when they resolve so login-required projects
     (e.g. ``CUBRIDQA``) are searchable too.
 
-    Unlike ``fetch_issue`` (which swallows non-401 errors and returns ``{}``),
-    this raises :class:`JiraError` on HTTP/network failure so callers can tell a
-    genuinely empty result set apart from a rejected query (e.g. a malformed
+    Like ``fetch_issue``, this raises :class:`JiraError` on HTTP/network
+    failure so callers can tell a genuinely empty result set apart from a
+    rejected query (e.g. a malformed
     JQL string yields HTTP 400, not zero hits). The raised error carries the
     HTTP ``code`` so the CLI can honor the exit-code contract; 5xx and
     transient network errors get one short retry, mirroring :class:`JiraClient`.

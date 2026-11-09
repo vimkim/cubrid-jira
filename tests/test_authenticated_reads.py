@@ -114,12 +114,15 @@ def test_fetch_issue_raises_on_401(fake_server):
     assert len(fake_server.requests) == 1
 
 
-def test_fetch_issue_still_swallows_404(fake_server, capsys):
-    # Non-auth failures keep the old behavior: one missing related issue must
-    # not abort a whole walk, and a 404 carries no lockout risk.
+def test_fetch_issue_raises_with_the_status_on_404(fake_server):
+    # The walk skips a missing related issue itself
+    # (test_exit_code_contract.test_search_skips_a_missing_related_issue);
+    # fetch_issue keeps the status so the requested issue maps to exit 4.
     fake_server.route("GET", "", raise_=make_http_error(404, "gone"))
-    assert fetch_issue("CBRD-404") == {}
-    assert "[HTTP 404]" in capsys.readouterr().err
+    with pytest.raises(http.JiraError) as ei:
+        fetch_issue("CBRD-404")
+    assert ei.value.code == 404
+    assert len(fake_server.requests) == 1
 
 
 def test_search_command_401_exits_2_after_single_attempt(fake_server, tmp_path, monkeypatch):

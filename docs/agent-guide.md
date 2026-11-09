@@ -62,8 +62,8 @@ user fixes the credentials. You run the command again only after they say so.
 | 4 | Check the key and the server. An `RND` key on the default server is not found. |
 | 5 | JIRA rejected a field or a query. stderr holds JIRA's error messages. Fix the value and repeat the dry run. |
 
-`search` exits 1, not 4, when the issue does not exist, and `attachment` exits
-5 for a missing key. stderr shows the HTTP status in both cases. Dry runs of
+`attachment` exits 5, not 4, for a missing key, because it finds the issue
+through a JQL query. Dry runs of
 `comment`, `comment-update`, `comment-delete`, `link`, `assign`, and `update`
 send no request, so a wrong key fails only on `--yes`. Read the issue with
 `search` first when the key came from text you did not verify.

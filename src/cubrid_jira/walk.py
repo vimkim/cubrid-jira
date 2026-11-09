@@ -40,6 +40,17 @@ def save_issue(
     return path
 
 
+def _fetch(key: str, depth: int, server: str) -> dict:
+    """Fetch ``key``; skip a related issue (depth > 0) that fails, except on 401."""
+    try:
+        return fetch_issue(key, server=server)
+    except JiraError as e:
+        if depth == 0 or e.code == 401:
+            raise
+        print(f"  Skipping {key}: {e}", file=sys.stderr)
+        return {}
+
+
 def fetch_recursive(
     key: str,
     max_depth: int,
@@ -61,7 +72,7 @@ def fetch_recursive(
     if not force and already_exists:
         print(f"Skipping {key} (already exists: {path})", file=sys.stderr)
         if current_depth < max_depth:
-            data = fetch_issue(key, server=server)
+            data = _fetch(key, current_depth, server)
             if data:
                 for _rel, rkey in extract_related_keys(data):
                     fetch_recursive(
@@ -71,7 +82,7 @@ def fetch_recursive(
         return True
 
     print(f"Fetching {key} (depth {current_depth})...", file=sys.stderr)
-    data = fetch_issue(key, server=server)
+    data = _fetch(key, current_depth, server)
     if not data:
         return False
 

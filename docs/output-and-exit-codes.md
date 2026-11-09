@@ -86,11 +86,10 @@ command per unsent request.
 | 4 | HTTP 404. The issue or resource does not exist. | Check the key and the `--server`. |
 | 5 | HTTP 400. JIRA rejected the request. stderr prints JIRA's `errors` and `errorMessages`. | Fix the field values. A malformed JQL query also exits 5. |
 
-Field writes, `jql`, and `comment-list` map HTTP errors to these codes. These
-cases differ:
+Field writes, `search`, `jql`, and `comment-list` map HTTP errors to these
+codes. `search` maps a failure of the issue you asked for. It skips a related
+issue that fails, unless the failure is a 401. These cases differ:
 
-- `search` exits 2 on a 401 and 1 on any other failed fetch, including a
-  missing issue. stderr shows the HTTP status, such as `[HTTP 404]`.
 - `attachment` finds the issue through a JQL query, so a missing key is an
   HTTP 400 and exits 5.
 - The structural writes map a 401 from any wizard step to exit 2. Any other
