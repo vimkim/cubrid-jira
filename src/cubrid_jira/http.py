@@ -50,12 +50,16 @@ def exit_code_for_http(code: int | None) -> int:
     return {400: 5, 401: 2, 403: 3, 404: 4}.get(code or 0, 1)
 
 
+class IssueKeyError(ValueError):
+    """A command-line argument holds no issue key such as ``CBRD-26463``."""
+
+
 def parse_issue_key(arg: str) -> str:
     """Extract an issue key (e.g. ``CBRD-26463``) from a URL or bare key."""
     m = re.search(r"([A-Z]+-\d+)", arg)
     if m:
         return m.group(1)
-    raise ValueError(f"Cannot parse issue key from: {arg!r}")
+    raise IssueKeyError(f"Cannot parse issue key from: {arg!r}")
 
 
 def basic_auth_header(user: str, password: str) -> str:

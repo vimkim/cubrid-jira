@@ -44,6 +44,7 @@ from cubrid_jira.fields import (
     save_field_index,
 )
 from cubrid_jira.http import (
+    IssueKeyError,
     JiraClient,
     JiraError,
     download_file,
@@ -1954,7 +1955,11 @@ def main(argv: list[str] | None = None) -> None:
         except ValueError as e:
             print(f"Error: {e}", file=sys.stderr)
             sys.exit(1)
-    args.func(args)
+    try:
+        args.func(args)
+    except IssueKeyError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
 
 
 if __name__ == "__main__":
