@@ -43,6 +43,15 @@ class WizardHTTPError(RuntimeError):
         self.body = body
 
 
+class WizardRedirectError(RuntimeError):
+    """A wizard request was redirected to another scheme or host."""
+
+
+def _origin(url: str) -> tuple[str, str]:
+    parts = urllib.parse.urlsplit(url)
+    return parts.scheme, parts.netloc
+
+
 class SessionClient:
     """Cookie-bearing HTTP client for ``/secure/*.jspa`` wizard endpoints.
 
@@ -155,6 +164,16 @@ class SessionClient:
         self.cookies.add_cookie_header(req)
         try:
             with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                final = resp.geturl()
+                if _origin(final) != _origin(url):
+                    # urllib turned the request into a GET at the new origin,
+                    # so a wizard step there would look like success.
+                    scheme, netloc = _origin(final)
+                    raise WizardRedirectError(
+                        f"{method.upper()} {url} was redirected to {final}. "
+                        "Nothing was written. Rerun with "
+                        f"--server {scheme}://{netloc}"
+                    )
                 _safe_extract_cookies(self.cookies, resp, req)
                 raw = resp.read()
         except urllib.error.HTTPError as e:

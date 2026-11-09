@@ -102,7 +102,9 @@ issue that fails, unless the failure is a 401. Three cases need care:
 ## Retries and redirects
 
 These rules cover reads and field writes. The Convert wizard steps of the
-structural writes get no retry and no redirect check.
+structural writes get no retry, because a repeated step could convert the issue
+twice. They follow a redirect only within the same scheme and host. A redirect
+to another one fails with exit code 1 and names the `--server` to rerun with.
 
 - A 5xx response or a transient network error gets one short retry. If that
   also fails, the command exits with code 1.

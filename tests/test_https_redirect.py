@@ -148,3 +148,22 @@ def test_wizard_follows_a_same_origin_redirect(monkeypatch):
         server.server_close()
 
     assert "CBRD-9" in html
+
+
+def test_convert_stops_when_the_wizard_login_is_redirected(
+    redirected, monkeypatch, tmp_path, capsys
+):
+    redirector_base, sink_base, sink = redirected
+    monkeypatch.setenv("CUBRID_JIRA_DIR", str(tmp_path))
+    monkeypatch.setattr(
+        "cubrid_jira.cli._fetch_meta",
+        lambda key, server: ("99", "Sub-task", "CBRD-1"),
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        main(["convert-to-issue", "CBRD-9", "--server", redirector_base, "--yes"])
+
+    err = capsys.readouterr().err
+    assert exc.value.code == 1
+    assert f"--server {sink_base}" in err
+    assert not [m for m, _ in sink.seen if m == "POST"]
