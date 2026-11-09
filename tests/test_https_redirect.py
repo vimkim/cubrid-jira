@@ -11,6 +11,7 @@ import pytest
 
 from cubrid_jira.cli import main
 from cubrid_jira.http import JiraClient
+from cubrid_jira.session import SessionClient, WizardRedirectError
 
 
 def test_default_jql_search_goes_straight_to_https(fake_server):
@@ -97,3 +98,53 @@ def test_redirected_write_is_refused(redirected, capsys, method, path, body):
     assert sink_base + path in err
     assert f"--server {sink_base}" in err
     assert not [m for m, _ in sink.seen if m in ("POST", "PUT")]
+
+
+def test_wizard_refuses_a_redirect_to_another_origin(redirected):
+    redirector_base, sink_base, sink = redirected
+    session = SessionClient(redirector_base, "u", "p", dry_run=False)
+
+    with pytest.raises(WizardRedirectError) as exc:
+        session.html_post("/secure/ConvertSubTaskConvert.jspa", {"id": "99"})
+
+    assert sink_base in str(exc.value)
+    assert f"--server {sink_base}" in str(exc.value)
+    assert not [m for m, _ in sink.seen if m == "POST"]
+
+
+class _WizardSuccessHandler(BaseHTTPRequestHandler):
+    def log_message(self, *_args):
+        pass
+
+    def _handle(self):
+        length = int(self.headers.get("Content-Length") or 0)
+        if length:
+            self.rfile.read(length)
+        if self.path == "/secure/ConvertSubTaskConvert.jspa":
+            self.send_response(302)
+            self.send_header("Location", "/browse/CBRD-9")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        payload = b"<html>CBRD-9</html>"
+        self.send_response(200)
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
+    do_GET = do_POST = _handle
+
+
+def test_wizard_follows_a_same_origin_redirect(monkeypatch):
+    monkeypatch.setenv("no_proxy", "*")
+    monkeypatch.setenv("NO_PROXY", "*")
+    server = HTTPServer(("127.0.0.1", 0), _WizardSuccessHandler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        session = SessionClient(_base(server), "u", "p", dry_run=False)
+        html = session.html_post("/secure/ConvertSubTaskConvert.jspa", {"id": "99"})
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    assert "CBRD-9" in html
