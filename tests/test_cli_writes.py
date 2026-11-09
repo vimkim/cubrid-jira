@@ -79,7 +79,7 @@ def test_create_dry_run_does_not_send(fake_server, tmp_path, capsys, monkeypatch
         }
     }
     assert put_body == {"fields": {"priority": {"name": "Major"}}}
-    assert "PUT http://jira.cubrid.org/rest/api/2/issue/<new-issue-key>" in out.err
+    assert "PUT https://jira.cubrid.org/rest/api/2/issue/<new-issue-key>" in out.err
 
 
 def test_create_priority_dry_run_json_plans_post_then_put(fake_server, tmp_path, capsys, monkeypatch):
@@ -91,9 +91,9 @@ def test_create_priority_dry_run_json_plans_post_then_put(fake_server, tmp_path,
     assert fake_server.requests == []
     reqs = json.loads(capsys.readouterr().out)["requests"]
     assert [(r["method"], r["url"]) for r in reqs] == [
-        ("POST", "http://jira.cubrid.org/rest/api/2/issue"),
-        ("PUT", "http://jira.cubrid.org/rest/api/2/issue/<new-issue-key>"),
-        ("POST", "http://jira.cubrid.org/rest/api/2/issueLink"),
+        ("POST", "https://jira.cubrid.org/rest/api/2/issue"),
+        ("PUT", "https://jira.cubrid.org/rest/api/2/issue/<new-issue-key>"),
+        ("POST", "https://jira.cubrid.org/rest/api/2/issueLink"),
     ]
     assert "priority" not in reqs[0]["body"]["fields"]
     assert reqs[1]["body"] == {"fields": {"priority": {"name": "Minor"}}}
@@ -116,7 +116,7 @@ def test_create_priority_live_posts_without_priority_then_puts(
     reqs = fake_server.requests
     assert [r.method for r in reqs[:2]] == ["POST", "PUT"]
     assert "priority" not in json.loads(reqs[0].body)["fields"]
-    assert reqs[1].url == "http://jira.cubrid.org/rest/api/2/issue/CBRD-999"
+    assert reqs[1].url == "https://jira.cubrid.org/rest/api/2/issue/CBRD-999"
     assert json.loads(reqs[1].body) == {"fields": {"priority": {"name": "Minor"}}}
     result = json.loads(capsys.readouterr().out)
     assert result["key"] == "CBRD-999"
@@ -159,7 +159,7 @@ def test_create_first_link_failure_reports_key_and_repair_commands(
     assert exc.value.code == 5
     err = capsys.readouterr().err
     assert "CBRD-999" in err
-    assert "http://jira.cubrid.org/browse/CBRD-999" in err
+    assert "https://jira.cubrid.org/browse/CBRD-999" in err
     assert "cubrid-jira link CBRD-999 --type Relates --to CBRD-1 --yes" in err
     assert "cubrid-jira link CBRD-999 --type Blocks --to CBRD-2 --yes" in err
     assert [(r.method, r.url.rsplit("/", 1)[-1]) for r in fake_server.requests] == [
@@ -193,7 +193,7 @@ def test_create_second_link_failure_json_keeps_key_and_lists_links(
     out = capsys.readouterr()
     result = json.loads(out.out)
     assert result["key"] == "CBRD-999"
-    assert result["url"] == "http://jira.cubrid.org/browse/CBRD-999"
+    assert result["url"] == "https://jira.cubrid.org/browse/CBRD-999"
     assert "link_error" in result
     assert result["links_created"] == [{"type": "Relates", "to": "CBRD-1"}]
     assert result["links_unsent"] == [
@@ -235,7 +235,7 @@ def test_create_subtask_dry_run_records_parent_without_field_lookup(
         "dry_run": True,
         "requests": [{
             "method": "POST",
-            "url": "http://jira.cubrid.org/rest/api/2/issue",
+            "url": "https://jira.cubrid.org/rest/api/2/issue",
             "body": {"fields": {
                 "project": {"key": "CBRD"},
                 "issuetype": {"name": "Sub-task"},
@@ -430,7 +430,7 @@ def test_create_live_posts_and_caches(fake_server, tmp_path, monkeypatch):
     ])
     # POST then GET.
     methods_paths = [(r.method, r.url) for r in fake_server.requests]
-    assert ("POST", "http://jira.cubrid.org/rest/api/2/issue") in methods_paths
+    assert ("POST", "https://jira.cubrid.org/rest/api/2/issue") in methods_paths
     assert any(
         m == "GET" and "/rest/api/2/issue/CBRD-999" in u
         for m, u in methods_paths

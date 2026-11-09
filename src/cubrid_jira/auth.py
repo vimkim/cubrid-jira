@@ -14,6 +14,8 @@ import os
 import sys
 from urllib.parse import urlparse
 
+from cubrid_jira.server import DEFAULT_SERVER
+
 
 def _host_of(server: str) -> str:
     host = urlparse(server).hostname
@@ -22,7 +24,7 @@ def _host_of(server: str) -> str:
 
 @functools.lru_cache(maxsize=None)
 def resolve_credentials_optional(
-    server: str = "http://jira.cubrid.org",
+    server: str = DEFAULT_SERVER,
 ) -> tuple[str, str] | None:
     """Resolve credentials without exiting when none are configured.
 
@@ -56,7 +58,7 @@ def resolve_credentials_optional(
     return None
 
 
-def resolve_credentials(server: str = "http://jira.cubrid.org") -> tuple[str, str]:
+def resolve_credentials(server: str = DEFAULT_SERVER) -> tuple[str, str]:
     creds = resolve_credentials_optional(server)
     if creds is not None:
         return creds

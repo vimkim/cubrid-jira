@@ -1,4 +1,4 @@
-"""Live integration smoke tests against http://jira.cubrid.org.
+"""Live integration smoke tests against https://jira.cubrid.org.
 
 Skipped by default. Run with::
 

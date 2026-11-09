@@ -312,6 +312,11 @@ class JiraClient:
                 return self._send(method, url, body_bytes)
             except urllib.error.HTTPError as e:
                 code = e.code
+                location = e.headers.get("Location") if e.headers else None
+                if 300 <= code < 400 and location:
+                    self._fail_redirect(
+                        method, url, urllib.parse.urljoin(url, location)
+                    )
                 detail = _read_error_body(e)
                 if code in (400, 401, 403, 404):
                     self._fail_http(code, path, detail)
@@ -361,6 +366,8 @@ class JiraClient:
             method=method.upper(),
         )
         with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+            if resp.geturl() != req.full_url:
+                self._fail_redirect(method, url, resp.geturl())
             raw = resp.read()
         if not raw:
             return {}
@@ -384,6 +391,18 @@ class JiraClient:
         else:
             print("Body:", file=sys.stderr)
             print(body_str)
+
+    def _fail_redirect(self, method: str, url: str, target: str) -> None:
+        # urllib turns a redirected POST into a body-less GET and reports its
+        # JSON as success, so a redirect must never be followed for a write.
+        parts = urllib.parse.urlsplit(target)
+        print(
+            f"Error: {method.upper()} {url} was redirected to {target}.\n"
+            "  Nothing was written. Rerun with "
+            f"--server {parts.scheme}://{parts.netloc}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
     def _fail_http(self, code: int, path: str, body: str) -> None:
         if code == 401:

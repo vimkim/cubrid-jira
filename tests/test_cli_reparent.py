@@ -170,7 +170,7 @@ def test_convert_to_issue_dry_run_records_three_steps(fake_server, capsys, tmp_p
     assert plan["requests"][0]["body"]["atl_token"] == "<extracted-at-runtime>"
     # The dry-run did exactly one read (the metadata fetch); no wizard or login traffic.
     assert [r.url for r in fake_server.requests] == [
-        "http://jira.cubrid.org/rest/api/2/issue/CBRD-9?expand=renderedFields",
+        "https://jira.cubrid.org/rest/api/2/issue/CBRD-9?expand=renderedFields",
     ]
 
 
@@ -210,14 +210,14 @@ def test_reparent_dry_run_records_six_steps(fake_server, capsys, tmp_path, monke
     assert len(plan["requests"]) == 6  # 3 forward + 3 reverse
     urls = [r["url"] for r in plan["requests"]]
     assert urls[:3] == [
-        "http://jira.cubrid.org/secure/ConvertSubTaskSetIssueType.jspa",
-        "http://jira.cubrid.org/secure/ConvertSubTaskUpdateFields.jspa",
-        "http://jira.cubrid.org/secure/ConvertSubTaskConvert.jspa",
+        "https://jira.cubrid.org/secure/ConvertSubTaskSetIssueType.jspa",
+        "https://jira.cubrid.org/secure/ConvertSubTaskUpdateFields.jspa",
+        "https://jira.cubrid.org/secure/ConvertSubTaskConvert.jspa",
     ]
     assert urls[3:] == [
-        "http://jira.cubrid.org/secure/ConvertIssueSetIssueType.jspa",
-        "http://jira.cubrid.org/secure/ConvertIssueUpdateFields.jspa",
-        "http://jira.cubrid.org/secure/ConvertIssueConvert.jspa",
+        "https://jira.cubrid.org/secure/ConvertIssueSetIssueType.jspa",
+        "https://jira.cubrid.org/secure/ConvertIssueUpdateFields.jspa",
+        "https://jira.cubrid.org/secure/ConvertIssueConvert.jspa",
     ]
     # Reverse Step 1 must include parentIssueKey = new parent.
     assert plan["requests"][3]["body"]["parentIssueKey"] == "CBRD-2"
@@ -295,9 +295,9 @@ def test_convert_to_issue_live_full_flow(fake_server, tmp_path, monkeypatch, cap
     # Three wizard POSTs in order.
     posts = _wizard_post_requests(fake_server)
     assert [r.url for r in posts] == [
-        "http://jira.cubrid.org/secure/ConvertSubTaskSetIssueType.jspa",
-        "http://jira.cubrid.org/secure/ConvertSubTaskUpdateFields.jspa",
-        "http://jira.cubrid.org/secure/ConvertSubTaskConvert.jspa",
+        "https://jira.cubrid.org/secure/ConvertSubTaskSetIssueType.jspa",
+        "https://jira.cubrid.org/secure/ConvertSubTaskUpdateFields.jspa",
+        "https://jira.cubrid.org/secure/ConvertSubTaskConvert.jspa",
     ]
     # Every wizard POST must carry X-Atlassian-Token: no-check.
     for p in posts:
@@ -419,7 +419,7 @@ def test_reparent_atomicity_warning_when_reverse_fails(
     assert "Task with no parent" in err
     assert (
         "convert-to-subtask CBRD-9 --to CBRD-2 "
-        "--server http://jira.cubrid.org --yes"
+        "--server https://jira.cubrid.org --yes"
     ) in err
 
 

@@ -1,6 +1,6 @@
 # cubrid-jira
 
-A CUBRID JIRA CLI that defaults to `http://jira.cubrid.org` with three workflow buckets:
+A CUBRID JIRA CLI that defaults to `https://jira.cubrid.org` with three workflow buckets:
 
 * **live-first reads** (`search`) — one issue by key, markdown to stdout, cache updated on every normal read.
 * **JQL list search** (`jql`) — list issues matching a JQL query as a markdown table (or `--output json`); read-only, no credentials.
@@ -137,7 +137,7 @@ Prints one issue's markdown to **stdout**; progress goes to stderr, so piping st
 
 ```sh
 cubrid-jira search CBRD-26463
-cubrid-jira search http://jira.cubrid.org/browse/CBRD-26463
+cubrid-jira search https://jira.cubrid.org/browse/CBRD-26463
 cubrid-jira search CBRD-26463 --cache-only    # offline/cache-only read
 cubrid-jira search CBRD-26463 --force         # deprecated; live fetch is default
 cubrid-jira search CBRD-26463 --no-recurse    # don't walk related issues
@@ -196,7 +196,7 @@ cubrid-jira jql "project = RND" --server http://jira.cubrid.com
 | `--max N` | `50` | `maxResults` — page size (must be ≥ 0). |
 | `--start-at N` | `0` | `startAt` — 0-based offset for pagination (must be ≥ 0). |
 | `--output {text,json}` | `text` | `text` = markdown table; `json` = the raw `/rest/api/2/search` response on one line. |
-| `--server URL` | `http://jira.cubrid.org` | Select the JIRA installation. |
+| `--server URL` | `https://jira.cubrid.org` | Select the JIRA installation. |
 
 - **`text`** prints a markdown table: key (linked) · status · type · assignee · updated · summary, headed by `N of TOTAL matching issues`. Cell values are escaped so pipes/newlines can't corrupt the table.
 - **`json`** prints the server's response verbatim on one line — pipe into `jq` or hand to an agent.
@@ -334,7 +334,7 @@ cubrid-jira create --project CBRD --type Task --summary "..." \
 
 # Discover valid option labels for a required select field:
 curl -u "$CUBRID_JIRA_USER:$CUBRID_JIRA_PASSWORD" \
-  'http://jira.cubrid.org/rest/api/2/issue/createmeta?projectKeys=CBRD&issuetypeNames=Task&expand=projects.issuetypes.fields' \
+  'https://jira.cubrid.org/rest/api/2/issue/createmeta?projectKeys=CBRD&issuetypeNames=Task&expand=projects.issuetypes.fields' \
   | jq '.projects[0].issuetypes[0].fields["customfield_210565"].allowedValues'
 ```
 
@@ -344,7 +344,7 @@ Global flags on every write subcommand:
 |---|---|---|
 | `--dry-run` | (always on unless `--yes`) | Print the resolved URL, masked headers, and JSON body. Don't send. |
 | `--yes` | off | Required to actually perform the live write. |
-| `--server URL` | `http://jira.cubrid.org` | JIRA base URL; use `http://jira.cubrid.com` for RND issues. |
+| `--server URL` | `https://jira.cubrid.org` | JIRA base URL; use `http://jira.cubrid.com` for RND issues. |
 | `-d`, `--dir DIR` | shared cache | Cache directory for post-write cache updates. |
 | `--output {text,json}` | `text` | Machine-readable output mode; see below. |
 
@@ -465,8 +465,8 @@ The dry-run `requests` field captures **every** mutation the live run would send
 
 ### ⚠️ Cleartext + CAPTCHA-lockout warnings
 
-- **Cleartext.** `jira.cubrid.org` is HTTP-only; basic-auth headers travel unencrypted. Use a trusted network and a JIRA-only password.
-- **CAPTCHA.** Jira Server 7.7.1 locks an account and forces a web-UI CAPTCHA after a small number of failed basic-auth attempts. The CLI **never retries on 401** to avoid triggering this. If you see `Error: Auth failed (HTTP 401)`, log into `http://jira.cubrid.org` in a browser, solve the CAPTCHA, fix your credentials, and try again.
+- **Cleartext.** `jira.cubrid.com` is HTTP-only; basic-auth headers sent to it travel unencrypted. Use a trusted network and a JIRA-only password.
+- **CAPTCHA.** Jira Server 7.7.1 locks an account and forces a web-UI CAPTCHA after a small number of failed basic-auth attempts. The CLI **never retries on 401** to avoid triggering this. If you see `Error: Auth failed (HTTP 401)`, log into `https://jira.cubrid.org` in a browser, solve the CAPTCHA, fix your credentials, and try again.
 
 ### Resolution order
 

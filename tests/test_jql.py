@@ -51,7 +51,7 @@ def test_render_table_has_header_and_rows():
     assert "2 of 2 matching issues" in md
     assert "| Key | Status | Type | Assignee | Updated | Summary |" in md
     # Linked key, status, truncated date, escaped pipe in summary.
-    assert "[CBRD-100](http://jira.cubrid.org/browse/CBRD-100)" in md
+    assert "[CBRD-100](https://jira.cubrid.org/browse/CBRD-100)" in md
     assert "| Develop |" in md
     assert "| 2026-06-02 |" in md
     assert "Fix a \\| piped thing" in md

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import urllib.parse
 
-DEFAULT_SERVER = "http://jira.cubrid.org"
+DEFAULT_SERVER = "https://jira.cubrid.org"
 
 
 def normalize_server(server: str) -> str:

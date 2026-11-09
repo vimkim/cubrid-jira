@@ -61,9 +61,13 @@ def _fast_retries(monkeypatch):
 
 
 class _FakeResponse:
-    def __init__(self, body: bytes):
+    def __init__(self, body: bytes, url: str):
         self._body = body
+        self._url = url
         self._pos = 0
+
+    def geturl(self) -> str:
+        return self._url
 
     def read(self, size: int = -1) -> bytes:
         # Supports chunked reads (read(65536)) for download streaming as well
@@ -135,7 +139,7 @@ class FakeJiraServer:
                 payload = response
             else:
                 payload = str(response).encode("utf-8")
-            return _FakeResponse(payload)
+            return _FakeResponse(payload, url)
         raise AssertionError(f"Unexpected request: {method} {url}")
 
 

@@ -69,7 +69,7 @@ def test_link_dry_run_json(fake_server, capsys):
         "dry_run": True,
         "requests": [{
             "method": "POST",
-            "url": "http://jira.cubrid.org/rest/api/2/issueLink",
+            "url": "https://jira.cubrid.org/rest/api/2/issueLink",
             "body": {
                 "type": {"name": "Relates"},
                 "inwardIssue": {"key": "CBRD-1"},
@@ -100,7 +100,7 @@ def test_comment_dry_run_json_uses_markdown_conversion(
         "dry_run": True,
         "requests": [{
             "method": "POST",
-            "url": "http://jira.cubrid.org/rest/api/2/issue/CBRD-5/comment",
+            "url": "https://jira.cubrid.org/rest/api/2/issue/CBRD-5/comment",
             "body": {"body": "h1. Title\n{{code}}\n"},
         }],
     }
@@ -118,7 +118,7 @@ def test_create_live_json_shape(fake_server, tmp_path, monkeypatch, capsys):
         response={
             "id": "12345",
             "key": "CBRD-999",
-            "self": "http://jira.cubrid.org/rest/api/2/issue/12345",
+            "self": "https://jira.cubrid.org/rest/api/2/issue/12345",
         },
     )
     fake_server.route(
@@ -137,8 +137,8 @@ def test_create_live_json_shape(fake_server, tmp_path, monkeypatch, capsys):
     assert result == {
         "key": "CBRD-999",
         "id": "12345",
-        "self": "http://jira.cubrid.org/rest/api/2/issue/12345",
-        "url": "http://jira.cubrid.org/browse/CBRD-999",
+        "self": "https://jira.cubrid.org/rest/api/2/issue/12345",
+        "url": "https://jira.cubrid.org/browse/CBRD-999",
     }
 
 
