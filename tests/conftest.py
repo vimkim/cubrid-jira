@@ -38,16 +38,20 @@ PANDOC_HAS_JIRA = _pandoc_has_jira_reader_and_writer()
 
 
 @pytest.fixture(autouse=True)
-def _stub_credentials(monkeypatch):
+def _stub_credentials(monkeypatch, request):
     """Make sure auth.resolve_credentials() never touches the user's real netrc.
 
     resolve_credentials_optional is memoized per process (one netrc parse per
     run), so the cache must be reset around every test or the first test's
     credentials would leak into the rest of the suite.
+
+    Live tests keep the user's real credentials: the fake ones would reach
+    jira.cubrid.org and count as failed logins toward the CAPTCHA lockout.
     """
     resolve_credentials_optional.cache_clear()
-    monkeypatch.setenv("CUBRID_JIRA_USER", "testuser")
-    monkeypatch.setenv("CUBRID_JIRA_PASSWORD", "testpw")
+    if request.node.get_closest_marker("live") is None:
+        monkeypatch.setenv("CUBRID_JIRA_USER", "testuser")
+        monkeypatch.setenv("CUBRID_JIRA_PASSWORD", "testpw")
     yield
     resolve_credentials_optional.cache_clear()
 
