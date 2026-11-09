@@ -117,7 +117,7 @@ def fetch_issue(key: str, *, server: str = DEFAULT_SERVER) -> dict:
         raise JiraError(
             f"Failed to fetch {key}: HTTP {e.code} {e.reason}".rstrip(), code=e.code,
         ) from e
-    except (OSError, ValueError) as e:
+    except Exception as e:
         raise JiraError(f"Failed to fetch {key}: {e}") from e
 
 
@@ -139,8 +139,8 @@ def search_issues(
 
     Like ``fetch_issue``, this raises :class:`JiraError` on HTTP/network
     failure so callers can tell a genuinely empty result set apart from a
-    rejected query (e.g. a malformed
-    JQL string yields HTTP 400, not zero hits). The raised error carries the
+    rejected query (e.g. a malformed JQL string yields HTTP 400, not zero
+    hits). The raised error carries the
     HTTP ``code`` so the CLI can honor the exit-code contract; 5xx and
     transient network errors get one short retry, mirroring :class:`JiraClient`.
     """
