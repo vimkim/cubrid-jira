@@ -113,9 +113,19 @@ The legacy import path `cubrid_jira_fetcher` re-exports `cubrid_jira` and emits 
 ## Tests
 
 ```sh
-uv run pytest              # unit + mocked integration (~0.2s)
+uv run pytest              # unit + mocked integration (a few seconds)
 uv run pytest -m live      # also hits the real jira.cubrid.org (read-only)
 ```
+
+## User docs
+
+`README.md` is the landing page. User-facing behavior lives in `docs/`:
+`commands.md` (flags, behavior, cache effects), `output-and-exit-codes.md`
+(JSON shapes, exit codes), `setup.md` (install, credentials, servers, paths),
+`recipes.md`, and `agent-guide.md` (the contract for agents that call the CLI
+from other repositories). When a change alters what a user or a calling agent
+sees, update the matching page in the same commit.
+`tests/test_docs_examples.py` fails when a documented command stops parsing.
 
 ## Agent skills
 

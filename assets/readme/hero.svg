@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="660" viewBox="0 0 1200 660" role="img" aria-labelledby="title desc">
+  <title id="title">cubrid-jira</title>
+  <desc id="desc">cubrid-jira reads CUBRID JIRA issues as Markdown and previews every write as a dry run until you add --yes. A terminal shows real output: cubrid-jira search CBRD-27984 prints the issue title and metadata table, and cubrid-jira comment CBRD-27984 prints a dry-run plan for a POST to the comment endpoint with the Markdown body converted to Jira wiki markup.</desc>
+
+  <rect x="0.5" y="0.5" width="1199" height="659" rx="24" fill="#0b0f14" stroke="#30363d"/>
+
+  <g id="title-block" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif">
+    <text x="56" y="86" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="18" letter-spacing="1" fill="#8b98a5">CUBRID JIRA · COMMAND LINE</text>
+    <text x="52" y="164" font-size="76" font-weight="700" fill="#e6edf3">cubrid-jira</text>
+    <text x="56" y="214" font-size="27" fill="#c9d4df">Read issues as Markdown. Preview every change first.</text>
+  </g>
+
+  <g id="gate" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="20">
+    <text x="842" y="104" fill="#e6edf3">reads</text>
+    <text x="942" y="104" fill="#8b98a5">print Markdown</text>
+    <text x="842" y="144" fill="#e6edf3">writes</text>
+    <text x="942" y="144" fill="#8b98a5">print a plan</text>
+    <rect x="832" y="160" width="86" height="32" rx="6" fill="#e3b341" fill-opacity="0.16" stroke="#e3b341" stroke-opacity="0.6"/>
+    <text x="842" y="184" fill="#e3b341" font-weight="700">--yes</text>
+    <text x="942" y="184" fill="#8b98a5">sends it</text>
+  </g>
+
+  <g id="terminal" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="20">
+    <rect x="56" y="252" width="1088" height="352" rx="14" fill="#11161d" stroke="#232c37"/>
+
+    <text x="88" y="298"><tspan fill="#56d364">$</tspan><tspan fill="#e6edf3" dx="12">cubrid-jira search CBRD-27984 --no-recurse</tspan></text>
+    <text x="88" y="330" fill="#e6edf3"># [CBRD-27984] Zero-length BIT/VARBIT bind value is stored as NULL</text>
+    <text x="88" y="362" fill="#8b98a5">| Status | Open |</text>
+    <text x="88" y="394" fill="#8b98a5">| Type | Correct Error |</text>
+    <text x="88" y="426" fill="#8b98a5">| Components | Broker/CAS |</text>
+
+    <text x="88" y="474"><tspan fill="#56d364">$</tspan><tspan fill="#e6edf3" dx="12">cubrid-jira comment CBRD-27984 --body-file note.md</tspan></text>
+    <text x="88" y="506" fill="#e3b341"># DRY RUN — no request sent. Add <tspan font-weight="700">--yes</tspan> to perform the live write.</text>
+    <text x="88" y="538" fill="#e6edf3">POST https://jira.cubrid.org/rest/api/2/issue/CBRD-27984/comment</text>
+    <text x="112" y="570" fill="#8b98a5">"body": "Reproduced on {{develop}} with *CCI 11.4*.\n"</text>
+  </g>
+
+  <text x="56" y="636" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="16" fill="#5d6b78">Real output from jira.cubrid.org, shortened. The comment was not sent.</text>
+</svg>
