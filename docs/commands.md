@@ -180,7 +180,8 @@ cubrid-jira update         ISSUE [--summary TEXT] [--description-file PATH]
 
 #### `create`
 
-`create` creates an issue and prints its key.
+`create` creates an issue. In text mode it prints `Created <KEY>: <URL>` on
+stderr. With `--output json`, the key and URL are in the JSON result on stdout.
 
 ```sh
 cubrid-jira create --project CBRD --type Bug --summary "csql crashes on an empty table" \
@@ -413,7 +414,7 @@ Run the recovery command once. Do not retry `reparent` in a loop.
 | Binary | Use instead |
 |---|---|
 | `cubrid-jira-search` | `cubrid-jira search` |
-| `cubrid-jira-fetch` | `cubrid-jira search`. `cubrid-jira-fetch KEY --depth N` still fetches related issues to depth `N` and overwrites cached files. `--skip-existing` keeps files that are already cached. |
+| `cubrid-jira-fetch` | `cubrid-jira search`. `cubrid-jira-fetch KEY --depth N` still fetches related issues to depth `N` and writes them to `./related_issues/`, or to `-d DIR`. It overwrites existing files unless you pass `--skip-existing`. |
 
 The Python import path `cubrid_jira_fetcher` re-exports `cubrid_jira` and
 emits a `DeprecationWarning`. Import `cubrid_jira` instead.

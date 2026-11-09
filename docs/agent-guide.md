@@ -63,8 +63,10 @@ user fixes the credentials. You run the command again only after they say so.
 | 5 | JIRA rejected a field or a query. stderr holds JIRA's error messages. Fix the value and repeat the dry run. |
 
 `search` exits 1, not 4, when the issue does not exist, and `attachment` exits
-5 for a missing key. stderr shows the HTTP status in both cases. A dry run does
-not check that the issue exists, so a wrong key fails only on `--yes`.
+5 for a missing key. stderr shows the HTTP status in both cases. Dry runs of
+`comment`, `comment-update`, `comment-delete`, `link`, `assign`, and `update`
+send no request, so a wrong key fails only on `--yes`. Read the issue with
+`search` first when the key came from text you did not verify.
 
 ## Finish a partial write
 
@@ -78,8 +80,9 @@ command once, after a dry run of it.
 - **`reparent` prints `!!! ATOMICITY WARNING`.** The issue is now a Task with no
   parent. Run the printed `convert-to-subtask` command.
 - **`transition` exits 1 and lists resolution names.** The transition sets a
-  resolution. Pick a name from the list, or ask the user, and pass it with
-  `--resolution`. JIRA cannot change a resolution afterwards.
+  resolution, and JIRA cannot change a resolution afterwards. Use the name the
+  user gave. If they gave none, show them the list and ask. Pass the name with
+  `--resolution`.
 
 ## Read efficiently
 
@@ -97,11 +100,12 @@ command once, after a dry run of it.
 
 The [`cubrid-jira` skill](https://github.com/vimkim/my-cubrid-skills/tree/main/cubrid-jira)
 teaches an agent two workflows on top of this contract: read an issue by key,
-and publish a reviewed Markdown file as an issue description. Install it with
-the [skills CLI](https://github.com/vercel-labs/skills):
+and publish a reviewed Markdown file as an issue description. The publish
+workflow runs a link checker from the `cubrid-common` skill in the same
+repository. Install both with the [skills CLI](https://github.com/vercel-labs/skills):
 
 ```sh
-npx skills add vimkim/my-cubrid-skills --skill cubrid-jira
+npx skills add vimkim/my-cubrid-skills --skill cubrid-jira cubrid-common
 ```
 
 ## Look up details

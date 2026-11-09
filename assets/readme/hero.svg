@@ -26,8 +26,8 @@
     <text x="88" y="298"><tspan fill="#56d364">$</tspan><tspan fill="#e6edf3" dx="12">cubrid-jira search CBRD-27984 --no-recurse</tspan></text>
     <text x="88" y="330" fill="#e6edf3"># [CBRD-27984] Zero-length BIT/VARBIT bind value is stored as NULL</text>
     <text x="88" y="362" fill="#8b98a5">| Status | Open |</text>
-    <text x="88" y="394" fill="#8b98a5">| Type | Correct Error |</text>
-    <text x="88" y="426" fill="#8b98a5">| Components | Broker/CAS |</text>
+    <text x="88" y="394" fill="#8b98a5">| Priority | Minor |</text>
+    <text x="88" y="426" fill="#8b98a5">| Type | Correct Error |</text>
 
     <text x="88" y="474"><tspan fill="#56d364">$</tspan><tspan fill="#e6edf3" dx="12">cubrid-jira comment CBRD-27984 --body-file note.md</tspan></text>
     <text x="88" y="506" fill="#e3b341"># DRY RUN — no request sent. Add <tspan font-weight="700">--yes</tspan> to perform the live write.</text>

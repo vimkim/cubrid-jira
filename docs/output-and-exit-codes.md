@@ -67,8 +67,8 @@ adds:
 
 | Field | When | Meaning |
 |---|---|---|
-| `priority_error` | The priority PUT failed. | The error text. |
-| `link_error` | A link POST failed. | The error text. |
+| `priority_error` | The priority PUT failed. | A short message that names the failed request and its exit code. stderr has JIRA's error. |
+| `link_error` | A link POST failed. | The same kind of message for the failed link. |
 | `links_created` | Either failure. | Links already created, as `[{"type", "to"}]`. |
 | `links_unsent` | Either failure. | Links not sent, the failed one included, as `[{"type", "to"}]`. A priority failure lists every requested link. |
 
@@ -86,17 +86,26 @@ command per unsent request.
 | 4 | HTTP 404. The issue or resource does not exist. | Check the key and the `--server`. |
 | 5 | HTTP 400. JIRA rejected the request. stderr prints JIRA's `errors` and `errorMessages`. | Fix the field values. A malformed JQL query also exits 5. |
 
-Write commands, `jql`, and `comment-list` map HTTP errors to these codes,
-including each step of the Convert wizard. Three cases differ:
+Field writes, `jql`, and `comment-list` map HTTP errors to these codes. These
+cases differ:
 
 - `search` exits 2 on a 401 and 1 on any other failed fetch, including a
   missing issue. stderr shows the HTTP status, such as `[HTTP 404]`.
 - `attachment` finds the issue through a JQL query, so a missing key is an
   HTTP 400 and exits 5.
-- A dry run does not check that the issue exists. It exits 0 for a key that
-  the live run would reject.
+- The structural writes map a 401 from any wizard step to exit 2. Any other
+  HTTP error from a wizard step ends with a Python traceback and exit 1. The
+  exception is the second half of `reparent`, which prints the atomicity
+  warning instead.
+- Dry runs of `comment`, `comment-update`, `comment-delete`, `link`, `assign`,
+  and `update` send no request, so they exit 0 for a key that does not exist.
+  Dry runs of `transition` and the structural writes read the issue first and
+  exit 4 for a missing key.
 
 ## Retries and redirects
+
+These rules cover reads and field writes. The Convert wizard steps of the
+structural writes get no retry and no redirect check.
 
 - A 5xx response or a transient network error gets one short retry. If that
   also fails, the command exits with code 1.

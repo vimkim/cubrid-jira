@@ -32,7 +32,8 @@ Each command and flag is described in the [command reference](docs/commands.md).
 ## Install
 
 You need Python 3.14 or later and [pandoc](https://pandoc.org/) with the `jira`
-format. Use pandoc 2.19 or later.
+format. Use pandoc 2.19 or later. Install the CLI with
+[uv](https://github.com/astral-sh/uv):
 
 ```sh
 uv tool install git+https://github.com/vimkim/cubrid-jira.git
@@ -56,8 +57,8 @@ $ cubrid-jira search CBRD-27984 --no-recurse
 | Field | Value |
 |---|---|
 | Status | Open |
+| Priority | Minor |
 | Type | Correct Error |
-| Components | Broker/CAS |
 ...
 ```
 
@@ -134,10 +135,11 @@ Exit codes and JSON shapes are listed in
 Install the [`cubrid-jira` agent skill](https://github.com/vimkim/my-cubrid-skills/tree/main/cubrid-jira)
 from [my-cubrid-skills](https://github.com/vimkim/my-cubrid-skills). It teaches
 an agent to read an issue by key and to publish a reviewed Markdown file as an
-issue description, with a dry run first.
+issue description, with a dry run first. The publish step runs a link checker
+from the `cubrid-common` skill, so install both:
 
 ```sh
-npx skills add vimkim/my-cubrid-skills --skill cubrid-jira
+npx skills add vimkim/my-cubrid-skills --skill cubrid-jira cubrid-common
 ```
 
 To drive the CLI from your own agent instructions, point the agent at the
@@ -154,8 +156,10 @@ cubrid-jira search RND-2851 --server http://jira.cubrid.com
 ```
 
 `RND` issues are not visible without an account, so this server needs its own
-credentials. It also serves only plain HTTP, so those credentials travel
-unencrypted. See [Pick the server](docs/setup.md#pick-the-server).
+credentials. It serves only plain HTTP, so they travel unencrypted.
+`CUBRID_JIRA_USER` and `CUBRID_JIRA_PASSWORD` go to every server, so unset them
+and use one `~/.netrc` entry per host when your accounts differ. See
+[Pick the server](docs/setup.md#pick-the-server).
 
 ## Documentation
 

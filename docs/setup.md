@@ -81,7 +81,9 @@ Make the file readable only by you:
 chmod 600 ~/.netrc
 ```
 
-If your accounts differ between servers, add one `machine` entry per hostname.
+The environment variables win for every server, including `jira.cubrid.com`.
+If your accounts differ between servers, leave the variables unset and add one
+`machine` entry per hostname.
 
 > [!WARNING]
 > JIRA Server locks an account after a few failed logins and then demands a
