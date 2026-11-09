@@ -86,16 +86,16 @@ command per unsent request.
 | 4 | HTTP 404. The issue or resource does not exist. | Check the key and the `--server`. |
 | 5 | HTTP 400. JIRA rejected the request. stderr prints JIRA's `errors` and `errorMessages`. | Fix the field values. A malformed JQL query also exits 5. |
 
-Field writes, `search`, `jql`, and `comment-list` map HTTP errors to these
-codes. `search` maps a failure of the issue you asked for. It skips a related
-issue that fails, unless the failure is a 401. These cases differ:
+Every command maps HTTP errors to these codes, including each Convert wizard
+step. `search` maps a failure of the issue you asked for. It skips a related
+issue that fails, unless the failure is a 401. Three cases need care:
 
 - `attachment` finds the issue through a JQL query, so a missing key is an
   HTTP 400 and exits 5.
-- The structural writes map a 401 from any wizard step to exit 2. Any other
-  HTTP error from a wizard step ends with a Python traceback and exit 1. The
-  exception is the second half of `reparent`, which prints the atomicity
-  warning instead.
+- When a wizard step in the second half of `reparent` fails, the command
+  prints the atomicity warning and exits 1. A 401 there, or a failed read of
+  the final state, exits with its own code and no warning. After any nonzero
+  exit from `reparent --yes`, read the issue with `search` before you retry.
 - Dry runs of `comment`, `comment-update`, `comment-delete`, `link`, `assign`,
   and `update` send no request, so they exit 0 for a key that does not exist.
   Dry runs of `transition` and the structural writes read the issue first and

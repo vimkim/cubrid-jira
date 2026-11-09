@@ -58,7 +58,7 @@ from cubrid_jira.markdown import (
     format_search_results_markdown,
     markdown_to_jira_body,
 )
-from cubrid_jira.session import SessionClient
+from cubrid_jira.session import SessionClient, WizardHTTPError
 from cubrid_jira.server import DEFAULT_SERVER, select_server
 from cubrid_jira.spacing import normalize_korean_jira_spacing
 from cubrid_jira.walk import fetch_recursive, save_issue
@@ -1959,6 +1959,9 @@ def main(argv: list[str] | None = None) -> None:
     except IssueKeyError as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
+    except WizardHTTPError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(exit_code_for_http(e.code))
 
 
 if __name__ == "__main__":
