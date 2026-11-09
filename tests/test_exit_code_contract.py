@@ -153,3 +153,47 @@ def test_wizard_http_error_exits_with_the_mapped_code(
     assert ei.value.code == code
     assert "Error:" in err and f"HTTP {status}" in err
     assert "Traceback" not in err
+
+
+def test_search_stops_at_a_401_on_a_related_issue(
+    fake_server, tmp_path, monkeypatch, capsys
+):
+    monkeypatch.setenv("CUBRID_JIRA_DIR", str(tmp_path))
+    root = _issue("CBRD-7", "root summary", links=("CBRD-8", "CBRD-9"))
+    root["fields"].pop("parent")
+    _route_issue(fake_server, "CBRD-7", response=root)
+    _route_issue(fake_server, "CBRD-8", raise_=make_http_error(401))
+    _route_issue(fake_server, "CBRD-9", response=_issue("CBRD-9", "never fetched"))
+
+    with pytest.raises(SystemExit) as ei:
+        main(["search", "CBRD-7"])
+
+    assert ei.value.code == 2
+    assert [r.url.rsplit("/", 1)[-1] for r in fake_server.requests] == [
+        "CBRD-7?expand=renderedFields",
+        "CBRD-8?expand=renderedFields",
+    ]
+
+
+def test_wizard_network_error_exits_1_without_a_traceback(
+    fake_server, tmp_path, monkeypatch, capsys
+):
+    monkeypatch.setenv("CUBRID_JIRA_DIR", str(tmp_path))
+    fake_server.route("GET", "/secure/Dashboard.jspa", response=b"")
+    fake_server.route(
+        "POST", "/rest/auth/1/session",
+        response={"session": {"name": "JSESSIONID", "value": "X"}},
+    )
+    _route_issue(fake_server, "CBRD-9", response=_issue("CBRD-9", "s"))
+    fake_server.route("GET", "/secure/ConvertSubTask.jspa?id=100", response=WIZARD_PAGE)
+    fake_server.route(
+        "POST", "/secure/ConvertSubTaskSetIssueType.jspa",
+        raise_=TimeoutError("timed out"),
+    )
+
+    with pytest.raises(SystemExit) as ei:
+        main(["convert-to-issue", "CBRD-9", "--yes"])
+
+    err = capsys.readouterr().err
+    assert ei.value.code == 1
+    assert "Error:" in err and "timed out" in err
