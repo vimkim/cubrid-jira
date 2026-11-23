@@ -162,3 +162,60 @@ def test_find_contacts_flags_latin_and_digit_neighbors():
         (2, 2, "{{"),
         (3, 4, "}}"),
     ]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "{code}print(a{{x}}b){code}",
+        "{noformat}a{{b}}c{noformat}",
+        "{code:java}a{{b}}c{code}",
+        "{code:html}<b>{{name}}s</b>\n<i>{{n}}</i>\n{code}",
+        "{noformat}\n{{x}}y\n{noformat}",
+        # Inside a block, only the matching bare closer ends it.
+        "{code}a{{x}}b {noformat} c{{y}}d{code}",
+        "{code}a{{x}}b{code:sql}c{{y}}d{code}",
+    ],
+)
+def test_macro_content_is_left_alone_wherever_the_macro_sits_in_the_line(text):
+    assert normalize_jira_inline_spacing(text) == text
+    assert find_markup_contacts(text) == []
+
+
+def test_prose_around_a_mid_line_macro_is_still_fixed():
+    text = "앞{{a}}값 {code}z{code} 뒤{{b}}값"
+
+    assert normalize_jira_inline_spacing(text) == (
+        "앞 {{a}} 값 {code}z{code} 뒤 {{b}} 값"
+    )
+    assert [(c.line, c.column, c.marker) for c in find_markup_contacts(text)] == [
+        (1, 2, "{{"),
+        (1, 5, "}}"),
+        (1, 24, "{{"),
+        (1, 27, "}}"),
+    ]
+
+
+def test_a_macro_that_opens_mid_line_and_closes_on_a_later_line():
+    text = "앞{{a}}값 {code}\nx{{b}}y\n{code} 뒤{{c}}값\n끝{{d}}값\n"
+
+    assert normalize_jira_inline_spacing(text) == (
+        "앞 {{a}} 값 {code}\nx{{b}}y\n{code} 뒤 {{c}} 값\n끝 {{d}} 값\n"
+    )
+    assert [(c.line, c.marker) for c in find_markup_contacts(text)] == [
+        (1, "{{"),
+        (1, "}}"),
+        (3, "{{"),
+        (3, "}}"),
+        (4, "{{"),
+        (4, "}}"),
+    ]
+
+
+def test_a_code_tag_with_a_brace_next_to_it_is_monospace_not_a_macro():
+    prose = "앞{{code}}값 뒤{{noformat}}값"
+    inside = "{code}a {{code}} b{{x}}c{code}"
+
+    assert normalize_jira_inline_spacing(prose) == "앞 {{code}} 값 뒤 {{noformat}} 값"
+    assert normalize_jira_inline_spacing(inside) == inside
+    assert find_markup_contacts(inside) == []

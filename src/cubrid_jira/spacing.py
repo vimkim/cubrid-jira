@@ -25,7 +25,13 @@ INLINE_JIRA_RE = re.compile(
     """,
     re.VERBOSE,
 )
-JIRA_BLOCK_RE = re.compile(r"^\s*\{(code(?::[^}]*)?|noformat)\}\s*$")
+# A {code} or {noformat} macro opens anywhere in a line; only the bare
+# {code}/{noformat} of the same name closes it. Jira does not read a tag with a
+# brace right next to it as a macro: {{code}} is monospace text.
+JIRA_MACRO_OPEN_RE = re.compile(r"(?<!\{)\{(code(?::[^}\n]*)?|noformat)\}(?!\})")
+JIRA_MACRO_CLOSE_RE = {
+    name: re.compile(rf"(?<!\{{)\{{{name}\}}(?!\}})") for name in ("code", "noformat")
+}
 FENCE_RE = re.compile(r"^\s*(```|~~~)")
 
 
@@ -65,40 +71,50 @@ def _fix_inline_spacing(text: str) -> str:
     return "".join(result)
 
 
-def _lines_outside_blocks(text: str) -> Iterator[tuple[int, str, str, bool]]:
-    """Yield ``(line_number, content, newline, is_prose)`` for each line.
+def _prose_spans(text: str) -> Iterator[tuple[int, str, str, list[tuple[int, int]]]]:
+    """Yield ``(line_number, content, newline, spans)`` for each line.
 
-    ``is_prose`` is False inside ``{code}``/``{noformat}`` and fenced blocks,
-    and on the lines that open or close them.
+    ``spans`` are the ``(start, end)`` offsets in ``content`` that are prose.
+    Text inside ``{code}``/``{noformat}`` and fenced blocks is not, and neither
+    are the macro tags themselves. A macro may open or close anywhere in a line,
+    so one line can hold prose before a macro, the macro's content, and prose
+    after it.
     """
-    jira_block: str | None = None
+    macro: str | None = None
     fence_marker = ""
 
     for number, line in enumerate(text.splitlines(keepends=True), start=1):
         content = line.rstrip("\r\n")
         newline = line[len(content):]
 
-        jira_match = JIRA_BLOCK_RE.match(content)
-        if jira_match:
-            block_name = jira_match.group(1).split(":", 1)[0]
-            if jira_block is None:
-                jira_block = block_name
-            elif jira_block == block_name:
-                jira_block = None
-            yield number, content, newline, False
-            continue
-
-        fence_match = FENCE_RE.match(content)
-        if fence_match:
-            marker = fence_match.group(1)
+        fence = FENCE_RE.match(content)
+        if fence_marker or (macro is None and fence):
             if not fence_marker:
-                fence_marker = marker
-            elif marker == fence_marker:
+                fence_marker = fence.group(1)
+            elif fence and fence.group(1) == fence_marker:
                 fence_marker = ""
-            yield number, content, newline, False
+            yield number, content, newline, []
             continue
 
-        yield number, content, newline, jira_block is None and not fence_marker
+        spans: list[tuple[int, int]] = []
+        pos = 0
+        while True:
+            if macro is None:
+                opening = JIRA_MACRO_OPEN_RE.search(content, pos)
+                end = opening.start() if opening else len(content)
+                if pos < end:
+                    spans.append((pos, end))
+                if opening is None:
+                    break
+                macro = opening.group(1).split(":", 1)[0]
+                pos = opening.end()
+            else:
+                closing = JIRA_MACRO_CLOSE_RE[macro].search(content, pos)
+                if closing is None:
+                    break
+                macro = None
+                pos = closing.end()
+        yield number, content, newline, spans
 
 
 def normalize_jira_inline_spacing(text: str) -> str:
@@ -107,14 +123,17 @@ def normalize_jira_inline_spacing(text: str) -> str:
     ``{{ }}`` gets a space from any adjacent letter or digit; bold and emphasis
     only from adjacent Hangul.
 
-    Code/noformat blocks and Markdown-style fenced blocks are left unchanged.
+    Code/noformat blocks and Markdown-style fenced blocks are left unchanged,
+    including a macro that opens or closes in the middle of a line.
     """
     result: list[str] = []
-    for _, content, newline, is_prose in _lines_outside_blocks(text):
-        if is_prose:
-            result.append(_fix_inline_spacing(content) + newline)
-        else:
-            result.append(content + newline)
+    for _, content, newline, spans in _prose_spans(text):
+        pos = 0
+        for start, end in spans:
+            result.append(content[pos:start])
+            result.append(_fix_inline_spacing(content[start:end]))
+            pos = end
+        result.append(content[pos:] + newline)
     return "".join(result)
 
 
@@ -141,13 +160,12 @@ def find_markup_contacts(text: str) -> list[MarkupContact]:
     Lines and columns are 1-based; code/noformat and fenced blocks are skipped.
     """
     contacts: list[MarkupContact] = []
-    for number, content, _, is_prose in _lines_outside_blocks(text):
-        if not is_prose:
-            continue
-        for match in CONTACT_RE.finditer(content):
-            contacts.append(
-                MarkupContact(number, match.start() + 1, match.group(0), content)
-            )
+    for number, content, _, spans in _prose_spans(text):
+        for start, end in spans:
+            for match in CONTACT_RE.finditer(content, start, end):
+                contacts.append(
+                    MarkupContact(number, match.start() + 1, match.group(0), content)
+                )
     return contacts
 
 
