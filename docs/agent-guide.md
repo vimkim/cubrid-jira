@@ -8,6 +8,7 @@ agent that changes this repository's code reads [`CLAUDE.md`](../CLAUDE.md).
 ```text
 command      cubrid-jira <subcommand> [args]; `cubrid-jira <subcommand> --help` lists flags
 reads        search KEY | jql "QUERY" | attachment KEY | comment-list KEY | transition KEY
+             | lint FILE|KEY
              GET only. Run them freely.
 writes       create | comment | comment-update | comment-delete | link | transition --to
              | assign | update | convert-to-issue | convert-to-subtask | reparent

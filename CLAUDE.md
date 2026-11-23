@@ -4,6 +4,8 @@
 canonical binary    cubrid-jira <subcommand> [args…]
 read                search (one issue by key, cache-first) | jql (list by query, live)
                     | attachment (list/download issue attachments, live)
+                    | lint (FILE: {{ }} touching Hangul after write conversion;
+                      KEY: description + comments as stored, live)
 field-write         create | comment | comment-list | comment-update | comment-delete | link | transition | assign | update
 structural-write    convert-to-issue | convert-to-subtask | reparent
 credentials         env CUBRID_JIRA_USER + CUBRID_JIRA_PASSWORD
@@ -14,7 +16,7 @@ cache directory     $CUBRID_JIRA_DIR  ||  ~/.local/share/cubrid-jira/issues/
 attachments dir     --out || <state>/attachments/[<alternate-host>/]<KEY>
 output (stdout)     markdown or JSON
 output (stderr)     status + errors
-machine-readable    add `--output json` to write subcommands or to `jql`
+machine-readable    add `--output json` to write subcommands, `jql`, or `lint`
                     → exactly one JSON object on stdout
 exit codes          0 ok | 1 generic | 2 401 or argparse usage error | 3 403 | 4 404 | 5 400
 ```
@@ -45,6 +47,17 @@ reparent           <KEY> --to <PARENT>            move a Sub-task between parent
 
 Full background, traps, and curl-only smoke test:
 `docs/reparent-subtasks-via-convert-wizard.md`.
+
+## Korean markup guard
+
+JIRA Server renders `{{x}}의` literally, so writes run
+`spacing.normalize_korean_jira_spacing` (auto-fix), then
+`spacing.check_korean_markup` (refuse, exit 1). The check uses its own regex
+(`CONTACT_RE`), deliberately independent of the fixer's span matching, so a
+fixer gap stops the write instead of shipping broken markup. `lint` exposes
+the same detector for files and stored issue bodies. When the check fires on
+real input, fix the normalizer and add the case to `tests/test_spacing.py`;
+do not loosen the check.
 
 ## Create priority
 

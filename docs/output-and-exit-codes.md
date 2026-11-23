@@ -14,7 +14,7 @@ request line and headers on stderr and the JSON request body on stdout.
 
 ## JSON output
 
-Every write command, `jql`, `attachment`, `comment-list`, and
+Every write command, `jql`, `attachment`, `comment-list`, `lint`, and
 `cubrid-jira-kanban` accept `--output json`. With it, stdout holds exactly one
 JSON object on one line. Errors still go to stderr.
 
@@ -55,6 +55,8 @@ add `"resolution": {"id": "7", "name": "Not a bug"}`.
 |---|---|
 | `jql` | The raw `/rest/api/2/search` response from JIRA. |
 | `comment-list` | `{"issue", "total", "comments": [{"id", "author", "created", "body"}]}`. `author` is the display name. |
+| `lint` FILE | `{"target", "kind": "file", "ok", "problems"}`, plus `"body"` (the converted Jira body) with `--fix`. Each problem is `{"location": "body", "line", "column", "marker", "text"}`. |
+| `lint` KEY | `{"target", "kind": "issue", "ok", "checked": {"description", "comments", "comments_total"}, "problems"}`. `location` is `description` or `comment`; a comment problem adds `comment_id`. |
 | `transition` without `--to` | `{"issue", "transitions": [...]}`. Each transition has `id`, `name`, and `to` cut to `{id, name}`. A transition that carries a resolution adds `"resolution": {"required": true, "allowed": [names]}`. |
 | `attachment` | `{"issue", "count", "out_dir", "attachments": [...]}`. Each entry has `filename`, `size`, `mimeType`, `path`, `downloaded`, and `skipped` when the file was not saved. `--list` entries have `filename`, `size`, `mimeType`, and `content`, and the object has no `out_dir`. |
 | `cubrid-jira-kanban` | `{"total", "groups": [{"status", "count", "issues"}]}` |
@@ -80,7 +82,7 @@ command per unsent request.
 | Code | Meaning | What to do |
 |---|---|---|
 | 0 | Success, or the dry run finished. | |
-| 1 | Generic error: bad input, a parse failure, network errors after the retry, a refused redirect, a stale wizard token, or the `reparent` atomicity warning. | Read stderr. For a `reparent` atomicity warning, read the issue with the `search` command it prints, then run its recovery command if the issue is a Task with no parent. |
+| 1 | Generic error: bad input, a parse failure, a write body whose `{{`/`}}` still touches Korean text, a `lint` problem, network errors after the retry, a refused redirect, a stale wizard token, or the `reparent` atomicity warning. | Read stderr. For a `reparent` atomicity warning, read the issue with the `search` command it prints, then run its recovery command if the issue is a Task with no parent. |
 | 2 | HTTP 401, authentication failed. A command-line usage error also exits 2 and prints a `usage:` line on stderr. | For a usage error, fix the arguments. Otherwise stop and do not retry. See [401 and the CAPTCHA lockout](#401-and-the-captcha-lockout). |
 | 3 | HTTP 403. The account lacks permission. | Ask a JIRA admin or use another account. |
 | 4 | HTTP 404. The issue or resource does not exist. | Check the key and the `--server`. |

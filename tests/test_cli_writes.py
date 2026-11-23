@@ -1557,3 +1557,30 @@ def test_create_field_malformed_json_value_errors(
         ])
     err = capsys.readouterr().err
     assert "JSON" in err
+
+
+@pytest.mark.parametrize("live", [True, False])
+def test_write_refuses_body_whose_markup_still_touches_korean(
+    fake_server, tmp_path, monkeypatch, capsys, live
+):
+    # Simulate a normalizer gap: the converted body keeps "}}" against Hangul.
+    monkeypatch.setenv("CUBRID_JIRA_DIR", str(tmp_path))
+    monkeypatch.setattr(
+        "cubrid_jira.cli.markdown_to_jira_body",
+        lambda text: "정상\n* *{{REC_HOME}}이 아닌 행.*\n",
+    )
+    body_file = tmp_path / "body.md"
+    body_file.write_text("ignored")
+
+    with pytest.raises(SystemExit) as exc:
+        main([
+            "comment-update", "CBRD-5", "--id", "1001",
+            "--body-file", str(body_file),
+            *(["--yes"] if live else []),
+        ])
+
+    assert exc.value.code == 1
+    assert fake_server.requests == []
+    err = capsys.readouterr().err
+    assert "line 2, col 14: * *{{REC_HOME}}이 아닌 행.*" in err
+    assert "Refusing to send" in err

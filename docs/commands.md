@@ -8,7 +8,7 @@ Commands fall into three groups:
 
 | Group | Subcommands | Credentials | `--yes` |
 |---|---|---|---|
-| Read | `search`, `jql`, `attachment`, `comment-list`, `cubrid-jira-kanban` | Optional for `search`, `jql`, and `attachment`. Required for the others. | Not used |
+| Read | `search`, `jql`, `attachment`, `lint`, `comment-list`, `cubrid-jira-kanban` | Optional for `search`, `jql`, `attachment`, and `lint`. Required for the others. | Not used |
 | Field write | `create`, `comment`, `comment-update`, `comment-delete`, `link`, `transition`, `assign`, `update` | Required to send | Required to send |
 | Structural write | `convert-to-issue`, `convert-to-subtask`, `reparent` | Required to send | Required to send |
 
@@ -18,7 +18,7 @@ and the cache location, see [Set up cubrid-jira](setup.md).
 
 ## Read commands
 
-Read commands send only GET requests. `search`, `jql`, and `attachment` attach
+Read commands send only GET requests. `search`, `jql`, `attachment`, and `lint` attach
 credentials when env vars or `~/.netrc` provide them, and fall back to
 anonymous access otherwise, so public projects work without an account.
 `comment-list` and `cubrid-jira-kanban` always need credentials.
@@ -108,6 +108,46 @@ cubrid-jira comment-list CBRD-26463 --output json | jq -r '.comments[].id'
 `--limit N` keeps the `N` most recent comments (default 50). In JSON output,
 each comment has `id`, `author` (the display name, such as `Daehyun Kim`, not
 the username), `created`, and `body`.
+
+### `lint`
+
+`lint` finds `{{` and `}}` markers that touch Korean text. JIRA Server renders
+`{{name}}의` as literal braces instead of monospace. `lint` never writes.
+
+```text
+cubrid-jira lint FILE|-  [--from markdown|jira] [--fix] [--output json]
+cubrid-jira lint KEY|URL [--server URL] [--output json]
+```
+
+A file target (`-` reads stdin) goes through the same conversion as a write:
+pandoc for Markdown, then the Korean spacing fix. `lint` reports the markers
+that remain after that conversion, which means a gap in the spacing fix. Every
+write runs the same check and refuses to send such a body; `lint` shows it
+before you try. `--fix` prints the converted Jira body on stdout and moves the
+report to stderr.
+
+```sh
+cubrid-jira lint report.md
+cubrid-jira lint body.jira --from jira --fix > fixed.jira
+```
+
+An issue target, a key or a browse URL, is checked as it is stored on JIRA:
+the description and every comment. It always contacts JIRA. Use it to find
+bodies that were uploaded before a spacing fix, or edited in the web UI.
+
+```sh
+cubrid-jira lint CBRD-28073
+cubrid-jira lint CBRD-28073 --output json | jq '.problems'
+```
+
+Each problem names the line and column of the marker. For a broken comment,
+stderr prints a `comment-update ... --from jira` command: upload the stored
+body again unchanged, and the spacing fix repairs it. `--fix` and `--from`
+apply to file targets only; with an issue target they are a usage error
+(exit 2). A target that matches a key, such as `CBRD-123`, is read as a key
+unless a file with that name exists.
+
+`lint` exits 0 when it finds nothing and 1 when it finds a problem.
 
 ### `cubrid-jira-kanban`
 
@@ -327,7 +367,10 @@ The conversion handles these cases:
 - **Korean spacing.** JIRA Server fails to parse an inline marker that is
   followed directly by Hangul, such as `{{name}}의`. Both input formats get a
   spacing fix for this, including a marker nested in bold or emphasis, such as
-  `*{{name}}의 값*`.
+  `*{{name}}의 값*`. After the fix, a separate check looks for any `{{` or `}}`
+  that still touches Hangul. If it finds one, the write stops before sending,
+  dry runs included, and stderr names the line and column. Run
+  [`lint`](#lint) to check a body first.
 - **Code fence labels.** The CLI maps fence labels to the formatter names that
   `jira.cubrid.org` supports. `text`, `plaintext`, and any unknown label become
   `none`, so the issue does not show an unsupported-formatter error.
@@ -408,7 +451,7 @@ once. Do not retry `reparent` in a loop.
 |---|---|
 | `search` | Overwrites `<KEY>.md` and the files of one level of related issues. |
 | `search --cache-only` | None. Reads only. |
-| `comment-list`, `jql`, `attachment` | None. |
+| `comment-list`, `jql`, `attachment`, `lint` | None. |
 | `create` | Fetches the new issue and saves it. With `--parent`, deletes the parent's cached files so its subtask list refreshes on the next read. |
 | `comment`, `comment-update`, `comment-delete`, `transition`, `assign`, `update` | Deletes the issue's cached Markdown, so the next `search` fetches it. |
 | `link` | Deletes the cached Markdown of both issues. |

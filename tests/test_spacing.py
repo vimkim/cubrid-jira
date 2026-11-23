@@ -63,3 +63,41 @@ def test_normalize_markdown_code_span_nested_in_bold():
     assert normalize_korean_markdown_spacing(text) == (
         "- **`REC_HOME` 이 아닌 행.** 끝 *한국 `xy` 값*"
     )
+
+
+def test_find_contacts_reports_line_column_and_kind():
+    from cubrid_jira.spacing import find_korean_markup_contacts
+
+    text = "정상 {{ok}} 값\n* *{{REC_HOME}}이 아닌 행.*\n앞{{x}} 끝\n"
+
+    contacts = find_korean_markup_contacts(text)
+
+    assert [(c.line, c.column, c.marker) for c in contacts] == [
+        (2, 14, "}}"),
+        (3, 2, "{{"),
+    ]
+    assert contacts[0].text == "* *{{REC_HOME}}이 아닌 행.*"
+
+
+def test_find_contacts_skips_code_blocks_and_korean_inside_monospace():
+    from cubrid_jira.spacing import find_korean_markup_contacts
+
+    text = (
+        "{{한글}} 은 정상\n"
+        "{code:sql}\n"
+        "SELECT '{{x}}값';\n"
+        "{code}\n"
+        "```\n"
+        "{{x}}값\n"
+        "```\n"
+    )
+
+    assert find_korean_markup_contacts(text) == []
+
+
+def test_normalized_output_has_no_contacts():
+    from cubrid_jira.spacing import find_korean_markup_contacts
+
+    text = "* *{{REC_HOME}}이 아닌 행.* 한국{{code}}값 _기울임{{y}}값_끝"
+
+    assert find_korean_markup_contacts(normalize_korean_jira_spacing(text)) == []

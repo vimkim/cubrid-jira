@@ -60,7 +60,13 @@ from cubrid_jira.markdown import (
 )
 from cubrid_jira.session import SessionClient, WizardHTTPError, WizardRedirectError
 from cubrid_jira.server import DEFAULT_SERVER, select_server
-from cubrid_jira.spacing import normalize_korean_jira_spacing
+from cubrid_jira.spacing import (
+    KoreanMarkupError,
+    check_korean_markup,
+    find_korean_markup_contacts,
+    format_contacts,
+    normalize_korean_jira_spacing,
+)
 from cubrid_jira.walk import fetch_recursive, save_issue
 from cubrid_jira.wizard import (
     ISSUE_WIZARD,
@@ -327,12 +333,24 @@ def _make_session(args) -> SessionClient:
     )
 
 
-def _render_jira_body(text: str, input_format: str) -> str:
+def _convert_jira_body(text: str, input_format: str) -> str:
+    """Convert a body to Jira wiki markup with the Korean spacing fix."""
     if input_format == "jira":
         return normalize_korean_jira_spacing(text)
     if input_format == "markdown":
         return markdown_to_jira_body(text)
     raise ValueError(f"unknown body input format: {input_format!r}")
+
+
+def _render_jira_body(text: str, input_format: str) -> str:
+    """Convert a write body, then refuse it if ``{{``/``}}`` still touch Hangul.
+
+    The check is independent of the spacing fix, so a gap in the fix stops the
+    write instead of uploading markup that Jira renders literally.
+    """
+    body = _convert_jira_body(text, input_format)
+    check_korean_markup(body)
+    return body
 
 
 def _read_and_render_jira_body(
@@ -350,6 +368,14 @@ def _read_and_render_jira_body(
         return _render_jira_body(text, input_format)
     except MarkdownConversionError as e:
         print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+    except KoreanMarkupError as e:
+        print(
+            "Error: Jira markup still touches Korean text after the spacing "
+            f"fix:\n{e}\nRefusing to send. Add a space next to the marker in "
+            f"{body_file}, and report the case as a spacing-fix bug.",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
 
@@ -863,6 +889,176 @@ def _format_comment_line(c: dict) -> str:
     if len(body) > 80:
         body = body[:80] + "..."
     return f"{cid} | {author} | {created} | {body}"
+
+
+# --------------------------------------------------------------------------- #
+# lint
+# --------------------------------------------------------------------------- #
+
+_LINT_KEY_RE = re.compile(r"[A-Z][A-Z0-9]*-\d+")
+
+
+def _lint_is_issue_target(target: str) -> bool:
+    if target.startswith(("http://", "https://")):
+        return True
+    return _LINT_KEY_RE.fullmatch(target) is not None and not Path(target).exists()
+
+
+def _contact_dicts(contacts, **location) -> list[dict]:
+    return [
+        {
+            **location,
+            "line": c.line,
+            "column": c.column,
+            "marker": c.marker,
+            "text": c.text,
+        }
+        for c in contacts
+    ]
+
+
+def _lint_file(args) -> None:
+    target = args.issue
+    input_format = args.input_format or "markdown"
+    try:
+        if target == "-":
+            text = sys.stdin.read()
+        else:
+            text = Path(target).read_text(encoding="utf-8", newline="")
+    except OSError as e:
+        print(f"Error: cannot read {target}: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    try:
+        body = _convert_jira_body(text, input_format)
+    except MarkdownConversionError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    contacts = find_korean_markup_contacts(body)
+    if _output_format(args) == "json":
+        out: dict = {
+            "target": target,
+            "kind": "file",
+            "ok": not contacts,
+            "problems": _contact_dicts(contacts, location="body"),
+        }
+        if args.fix:
+            out["body"] = body
+        print(json.dumps(out, ensure_ascii=False))
+    else:
+        if args.fix:
+            sys.stdout.write(body)
+        report = sys.stderr if args.fix else sys.stdout
+        if contacts:
+            noun = "problem" if len(contacts) == 1 else "problems"
+            print(
+                f"{target}: {len(contacts)} {noun} left after the spacing fix",
+                file=report,
+            )
+            print(format_contacts(contacts), file=report)
+        else:
+            print(f"{target}: ok", file=report)
+    sys.exit(1 if contacts else 0)
+
+
+def _lint_issue(args) -> None:
+    if args.fix or args.input_format is not None:
+        flag = "--fix" if args.fix else "--from"
+        print(
+            f"Error: {flag} applies to file targets only. To repair an issue "
+            "body, re-upload it with comment-update or update --from jira.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+
+    key = parse_issue_key(args.issue)
+    fields = (fetch_issue(key, server=args.server) or {}).get("fields") or {}
+    comment_block = fields.get("comment") or {}
+    comments = comment_block.get("comments") or []
+    total = comment_block.get("total", len(comments))
+    if total > len(comments):
+        print(
+            f"Warning: checked {len(comments)} of {total} comments; "
+            "the server truncated the comment list.",
+            file=sys.stderr,
+        )
+
+    description_contacts = find_korean_markup_contacts(
+        fields.get("description") or ""
+    )
+    broken_comments = []
+    for c in comments:
+        contacts = find_korean_markup_contacts(c.get("body") or "")
+        if contacts:
+            broken_comments.append((c, contacts))
+
+    problems = _contact_dicts(description_contacts, location="description")
+    for c, contacts in broken_comments:
+        problems += _contact_dicts(
+            contacts, location="comment", comment_id=str(c.get("id")),
+        )
+
+    if _output_format(args) == "json":
+        print(json.dumps({
+            "target": key,
+            "kind": "issue",
+            "ok": not problems,
+            "checked": {
+                "description": True,
+                "comments": len(comments),
+                "comments_total": total,
+            },
+            "problems": problems,
+        }, ensure_ascii=False))
+        sys.exit(1 if problems else 0)
+
+    def _count(n: int) -> str:
+        return f"{n} problem" if n == 1 else f"{n} problems"
+
+    if description_contacts:
+        print(f"{key} description: {_count(len(description_contacts))}")
+        print(format_contacts(description_contacts))
+    for c, contacts in broken_comments:
+        author = (c.get("author") or {}).get("displayName") or "?"
+        created = (c.get("created") or "")[:10]
+        print(
+            f"{key} comment {c.get('id')} ({author}, {created}): "
+            f"{_count(len(contacts))}"
+        )
+        print(format_contacts(contacts))
+
+    broken = len(broken_comments) + (1 if description_contacts else 0)
+    print(
+        f"{key}: checked description and {len(comments)} comments; "
+        f"{broken} with problems"
+    )
+    if broken:
+        print(
+            "Repair: re-upload the stored body unchanged; --from jira applies "
+            "the spacing fix.",
+            file=sys.stderr,
+        )
+        for c, _ in broken_comments:
+            print(
+                f"  cubrid-jira comment-update {key} --id {c.get('id')} "
+                "--from jira --body-file BODY --yes",
+                file=sys.stderr,
+            )
+        if description_contacts:
+            print(
+                f"  cubrid-jira update {key} --description-file BODY "
+                "--from jira --yes",
+                file=sys.stderr,
+            )
+    sys.exit(1 if broken else 0)
+
+
+def cmd_lint(args) -> None:
+    if _lint_is_issue_target(args.issue):
+        _lint_issue(args)
+    else:
+        _lint_file(args)
 
 
 def cmd_comment_list(args) -> None:
@@ -1821,6 +2017,36 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_body_input_flag(p_comment, "--body-file")
     _add_write_globals(p_comment)
     p_comment.set_defaults(func=cmd_comment)
+
+    p_lint = sub.add_parser(
+        "lint",
+        help="Find {{ }} markers that touch Korean text, in a local body "
+             "file or in an issue's description and comments (read-only).",
+    )
+    p_lint.add_argument(
+        "issue", metavar="TARGET",
+        help="Body file ('-' for stdin), issue key, or browse URL.",
+    )
+    p_lint.add_argument(
+        "--from", dest="input_format", choices=("markdown", "jira"),
+        default=None,
+        help="File targets only: input format, converted as a write would "
+             "convert it (default: markdown).",
+    )
+    p_lint.add_argument(
+        "--fix", action="store_true",
+        help="File targets only: print the converted Jira body to stdout and "
+             "the report to stderr.",
+    )
+    p_lint.add_argument(
+        "--server", default=None,
+        help=f"JIRA server base URL for issue targets (default: {DEFAULT_SERVER}).",
+    )
+    p_lint.add_argument(
+        "--output", choices=("text", "json"), default="text",
+        help="'json' prints one result object on stdout.",
+    )
+    p_lint.set_defaults(func=cmd_lint)
 
     p_comment_list = sub.add_parser(
         "comment-list",
