@@ -371,7 +371,9 @@ The conversion handles these cases:
   both input formats get the same one. It adds a space there, including for a
   `{{ }}` nested in bold or emphasis, such as `*{{name}}의 값*`. Bold and
   emphasis markers get a space only from Hangul, because `foo_bar_baz` and
-  `a*b*c` are identifiers that JIRA leaves literal.
+  `a*b*c` are identifiers that JIRA leaves literal. A `*` or `_` inside
+  `{{ }}`, as in `{{col_이름}}`, is code text and never pairs with a marker
+  outside it.
   Pandoc reads the Markdown as written. A space inside the opening marker, as
   in `** bold**`, is literal text in CommonMark and is no longer turned into
   bold. Hangul next to `**강조**값` needs no space, because pandoc writes it as

@@ -4,9 +4,11 @@ Jira Server's renderer shows ``{{ }}`` literally when the character just
 outside it is a letter or digit in any script, for example ``{{name}}의`` or
 ``{{name}}s``. Bold and emphasis markers fail the same way next to Hangul only:
 ``foo_bar_baz`` and ``a*b*c`` are identifiers that Jira also leaves literal,
-so those two marker kinds are not spaced from Latin letters or digits. Raw
-Jira write bodies and Markdown-converted write bodies both pass through this
-helper before upload.
+so those two marker kinds are not spaced from Latin letters or digits. A ``*``
+or ``_`` opens or closes a span only at a line edge, next to a character that
+is not part of a word, or next to Hangul. ``{{ }}`` spans are found first and
+masked, so no marker pairs across a code boundary. Raw Jira write bodies and
+Markdown-converted write bodies both pass through this helper before upload.
 """
 
 from __future__ import annotations
@@ -17,14 +19,17 @@ from dataclasses import dataclass
 
 HANGUL = r"[\u1100-\u11FF\u3130-\u318F\uAC00-\uD7AF]"
 
-INLINE_JIRA_RE = re.compile(
+CODE_SPAN_RE = re.compile(r"\{\{[^\n{}]*?[^\s{}]\}\}")
+EMPHASIS_RE = re.compile(
     r"""
-    \{\{[^\n{}]*?[^\s{}]\}\}     |   # {{monospace}}
-    \*(?!\s)([^*\n]*?[^\s*])\*   |   # *bold*
-    _(?!\s)([^_\n]*?[^\s_])_         # _emphasis_
+    \*(?!\s)[^*\n]*?[^\s*]\*   |   # *bold*
+    _(?!\s)[^_\n]*?[^\s_]_         # _emphasis_
     """,
     re.VERBOSE,
 )
+# Stands in for a {{code}} span while bold and emphasis are matched, so a
+# marker inside code can neither open nor close a span outside it.
+CODE_MASK = "\0"
 # A {code} or {noformat} macro opens anywhere in a line; only the bare
 # {code}/{noformat} of the same name closes it. Jira does not read a tag with a
 # brace right next to it as a macro: {{code}} is monospace text.
@@ -39,36 +44,60 @@ def is_hangul_char(ch: str) -> bool:
     return re.match(HANGUL, ch) is not None
 
 
+def is_word_char(ch: str) -> bool:
+    """True for a character Jira treats as part of a word."""
+    return ch.isalnum()
+
+
+def _is_marker_boundary(ch: str) -> bool:
+    """True where a ``*`` or ``_`` may open or close a span.
+
+    Jira needs a line edge or a character that is not part of a word. Hangul
+    also counts: Jira refuses ``값*강조*값``, but the author clearly meant bold,
+    so the fixer spaces it.
+    """
+    return not ch or is_hangul_char(ch) or not is_word_char(ch)
+
+
+def _space_emphasis(masked: str, start: int, end: int, gaps: set[int]) -> None:
+    """Record the gaps that Hangul next to a bold or emphasis span needs.
+
+    Only ``masked[start:end]`` is searched, but a span's neighbors are read
+    from the whole string, so a nested span sees the marker around it.
+    """
+    pos = start
+    while match := EMPHASIS_RE.search(masked, pos, end):
+        first, last = match.span()
+        before = masked[first - 1] if first else ""
+        after = masked[last] if last < len(masked) else ""
+        if not (_is_marker_boundary(before) and _is_marker_boundary(after)):
+            # Not a span: its closer may still open the next one.
+            pos = first + 1
+            continue
+        if is_hangul_char(before):
+            gaps.add(first)
+        if is_hangul_char(after):
+            gaps.add(last)
+        _space_emphasis(masked, first + 1, last - 1, gaps)
+        pos = last
+
+
 def _fix_inline_spacing(text: str) -> str:
-    result: list[str] = []
-    last = 0
+    # ``gaps`` holds the offsets that get a space in front of them.
+    gaps: set[int] = set()
 
-    for match in INLINE_JIRA_RE.finditer(text):
-        start, end = match.span()
-        span = match.group(0)
-        if not span.startswith("{{"):
-            # Bold/emphasis: also space the code spans nested inside it.
-            span = span[0] + _fix_inline_spacing(span[1:-1]) + span[-1]
+    for match in CODE_SPAN_RE.finditer(text):
+        first, last = match.span()
+        # {{ }} breaks next to any letter or digit.
+        if first and is_word_char(text[first - 1]):
+            gaps.add(first)
+        if last < len(text) and is_word_char(text[last]):
+            gaps.add(last)
 
-        result.append(text[last:start])
+    masked = CODE_SPAN_RE.sub(lambda m: CODE_MASK * len(m.group()), text)
+    _space_emphasis(masked, 0, len(masked), gaps)
 
-        prev_char = text[start - 1] if start > 0 else ""
-        next_char = text[end] if end < len(text) else ""
-        # {{ }} breaks next to any letter or digit; bold/emphasis only next to Hangul.
-        touches = str.isalnum if span.startswith("{{") else is_hangul_char
-
-        if touches(prev_char) and not result[-1].endswith(" "):
-            result.append(" ")
-
-        result.append(span)
-
-        if touches(next_char):
-            result.append(" ")
-
-        last = end
-
-    result.append(text[last:])
-    return "".join(result)
+    return "".join(" " + ch if index in gaps else ch for index, ch in enumerate(text))
 
 
 def _prose_spans(text: str) -> Iterator[tuple[int, str, str, list[tuple[int, int]]]]:
@@ -137,7 +166,7 @@ def normalize_jira_inline_spacing(text: str) -> str:
     return "".join(result)
 
 
-# Deliberately independent of INLINE_JIRA_RE: it does not track span structure,
+# Deliberately independent of the fixer's span matching: it does not track span structure,
 # so it still catches a case the normalizer misses (CBRD-28073 comment 4778780,
 # where a {{code}} span nested in *bold* kept "}}" against Hangul).
 # [^\W_] is a letter or digit in any script, as str.isalnum() sees it.

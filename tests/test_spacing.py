@@ -219,3 +219,56 @@ def test_a_code_tag_with_a_brace_next_to_it_is_monospace_not_a_macro():
     assert normalize_jira_inline_spacing(prose) == "앞 {{code}} 값 뒤 {{noformat}} 값"
     assert normalize_jira_inline_spacing(inside) == inside
     assert find_markup_contacts(inside) == []
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "my_table의 {{col_이름}} 컬럼",
+        "2*3 {{x*값}} 끝",
+        "2*3 {{a*b}} 끝",
+        "snake_case 와 {{a_b_c}} 의 값",
+        "*bold* 와 {{a*b}} 와 *bold*",
+    ],
+)
+def test_marker_characters_inside_code_never_pair_with_markers_outside(text):
+    assert normalize_jira_inline_spacing(text) == text
+
+
+def test_a_false_emphasis_span_no_longer_hides_a_code_span_that_needs_spacing():
+    assert normalize_jira_inline_spacing("a_b {{c_d}}s") == "a_b {{c_d}} s"
+    assert normalize_jira_inline_spacing("my_table의 {{col_이름}}의") == (
+        "my_table의 {{col_이름}} 의"
+    )
+
+
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        ("값*강조*값", "값 *강조* 값"),
+        (".*강조*값", ".*강조* 값"),
+        ("값_기울임_.", "값 _기울임_."),
+        ("(_기울임_)값", "(_기울임_)값"),
+        ("*값_강조_값*", "*값 _강조_ 값*"),
+        # A rejected candidate must not swallow the marker that opens the next one.
+        ("foo_bar 값_x_", "foo_bar 값 _x_"),
+    ],
+)
+def test_marker_next_to_hangul_or_punctuation_is_spaced_from_hangul(text, expected):
+    assert normalize_jira_inline_spacing(text) == expected
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "a*b*값",       # the opener follows a letter: not markup in Jira
+        "값*b*c",       # the closer precedes a letter: not markup in Jira
+        "한국*강조*b",
+        "foo_bar_baz",
+        "a*b*c",
+        "my_table",
+        "x_1_y 값",
+    ],
+)
+def test_a_marker_pair_jira_cannot_read_as_markup_is_left_alone(text):
+    assert normalize_jira_inline_spacing(text) == text
