@@ -34,6 +34,9 @@ def _fix_inline_spacing(text: str) -> str:
     for match in INLINE_JIRA_RE.finditer(text):
         start, end = match.span()
         span = match.group(0)
+        if not span.startswith("{{"):
+            # Bold/emphasis: also space the code spans nested inside it.
+            span = span[0] + _fix_inline_spacing(span[1:-1]) + span[-1]
 
         result.append(text[last:start])
 

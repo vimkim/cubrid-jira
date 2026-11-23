@@ -326,7 +326,8 @@ The conversion handles these cases:
 
 - **Korean spacing.** JIRA Server fails to parse an inline marker that is
   followed directly by Hangul, such as `{{name}}의`. Both input formats get a
-  spacing fix for this.
+  spacing fix for this, including a marker nested in bold or emphasis, such as
+  `*{{name}}의 값*`.
 - **Code fence labels.** The CLI maps fence labels to the formatter names that
   `jira.cubrid.org` supports. `text`, `plaintext`, and any unknown label become
   `none`, so the issue does not show an unsupported-formatter error.

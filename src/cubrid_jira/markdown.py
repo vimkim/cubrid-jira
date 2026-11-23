@@ -164,6 +164,11 @@ def _fix_markdown_inline_spacing(text: str) -> str:
     for match in MARKDOWN_INLINE_RE.finditer(text):
         start, end = match.span()
         span = _normalize_markdown_span(match.group(0))
+        if not span.startswith("`"):
+            # Bold/italic: also space the code spans nested inside it.
+            marker = "**" if span.startswith("**") else "*"
+            inner = _fix_markdown_inline_spacing(span[len(marker):-len(marker)])
+            span = f"{marker}{inner}{marker}"
 
         result.append(text[last:start])
 

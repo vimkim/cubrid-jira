@@ -45,3 +45,21 @@ def test_normalize_skips_markdown_fenced_blocks():
     assert normalize_korean_jira_spacing(text) == (
         "본문 {{code}} 값\n```sql\nSELECT '본문{{code}}값';\n```\n"
     )
+
+
+def test_normalize_jira_code_span_nested_in_bold():
+    text = "* *{{REC_HOME}}이 아닌 행.* 병합은 *한국{{x}}값*끝"
+
+    assert normalize_korean_jira_spacing(text) == (
+        "* *{{REC_HOME}} 이 아닌 행.* 병합은 *한국 {{x}} 값* 끝"
+    )
+
+
+def test_normalize_markdown_code_span_nested_in_bold():
+    from cubrid_jira.markdown import normalize_korean_markdown_spacing
+
+    text = "- **`REC_HOME`이 아닌 행.** 끝 *한국`xy`값*"
+
+    assert normalize_korean_markdown_spacing(text) == (
+        "- **`REC_HOME` 이 아닌 행.** 끝 *한국 `xy` 값*"
+    )
