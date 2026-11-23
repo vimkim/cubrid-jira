@@ -39,7 +39,8 @@ def test_markdown_to_jira_body_sanitizes_and_postprocesses(monkeypatch):
         "timeout": 10,
     }
     assert "{{code}} 의 값" in body
-    assert "*foo* {{bar}} *baz*" in body
+    # Jira renders code inside bold (<b>foo <tt>bar</tt> baz</b>); keep it.
+    assert "*foo {{bar}} baz*" in body
 
 
 def test_markdown_to_jira_body_restores_abutting_noformat_placeholder(

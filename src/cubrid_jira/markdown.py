@@ -482,34 +482,6 @@ def _fix_jira_lines_outside_verbatim_blocks(text: str, fix_line) -> str:
     return "".join(result)
 
 
-def fix_jira_bold_code_nesting(text: str) -> str:
-    """Split Jira ``{{monospace}}`` spans out of Jira ``*bold*`` spans."""
-
-    def _fix_line(line: str) -> str:
-        if re.match(r"\s*\*+\s", line):
-            return line
-
-        def _split_bold(match):
-            inner = match.group(1)
-            if "{{" not in inner:
-                return match.group(0)
-
-            segments = re.split(r"(\{\{.*?\}\})", inner)
-            parts: list[str] = []
-            for segment in segments:
-                if segment.startswith("{{") and segment.endswith("}}"):
-                    parts.append(segment)
-                else:
-                    stripped = segment.strip()
-                    if stripped:
-                        parts.append(f"*{stripped}*")
-            return " ".join(parts)
-
-        return re.sub(r"\*(?!\s)([^*\n]+?)(?<!\s)\*", _split_bold, line)
-
-    return _fix_jira_lines_outside_verbatim_blocks(text, _fix_line)
-
-
 def normalize_jira_code_languages(text: str) -> str:
     """Prevent unsupported Jira source-code formatter labels.
 
@@ -580,7 +552,6 @@ def markdown_to_jira_body(md_text: str) -> str:
     jira_text = jira_text.replace(escaped_pipe_token, "&#124;")
     jira_text = normalize_jira_code_languages(jira_text)
     jira_text = _normalize_fenced_code_placeholders(jira_text, code_replacements)
-    jira_text = fix_jira_bold_code_nesting(jira_text)
     jira_text = normalize_korean_jira_spacing(jira_text)
     return _restore_fenced_code_contents(jira_text, code_replacements)
 
