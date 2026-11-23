@@ -136,12 +136,17 @@ class Spec:
 
 @dataclass(frozen=True)
 class LiteralCase:
-    """A hand-written Jira source with a hand-written expected rendering."""
+    """A hand-written source with a hand-written expected rendering.
+
+    ``exact`` keeps the whitespace outside code when comparing, for a case
+    whose defect would be a stray space in the prose.
+    """
 
     id: str
     source: str
     expected_html: str
     input_format: InputFormat = "jira"
+    exact: bool = False
 
 
 Case = Spec | LiteralCase
@@ -305,6 +310,8 @@ HOSTILE: tuple[LiteralCase, ...] = (
         "quote with \\`a\\`b here",
         "<p>quote with `a`b here</p>",
         "markdown",
+        # Round 1 wrote "`a` b": the space is in the prose, not in code.
+        exact=True,
     ),
     LiteralCase(
         "markdown:hostile:braces-inside-code",
@@ -538,24 +545,38 @@ _CODE_TEXT = re.compile(r"(<tt>.*?</tt>|<pre\b[^>]*>.*?</pre>)", re.DOTALL)
 _PRE = re.compile(r"<pre\b[^>]*>.*?</pre>", re.DOTALL)
 
 
-def squash_html(html: str) -> str:
-    """Normalize rendered HTML for comparison.
+def exact_html(html: str) -> str:
+    """Rendered HTML with one outer ``<p>..</p>`` dropped, whitespace kept.
 
-    Drops one outer ``<p>..</p>``, then all whitespace (incl. no-break)
-    *outside* code, so spaces the fixer inserts next to a span do not matter.
-    Text inside ``<tt>`` and ``<pre>`` is compared exactly: a space inserted
-    into code changes what the reader sees. Jira writes an escaped ``*`` as
-    ``&#42;``; numeric references are decoded so both spellings compare equal.
+    Jira writes an escaped ``*`` as ``&#42;``; numeric references are decoded so
+    both spellings compare equal.
     """
     html = _NUMERIC_REF.sub(lambda m: chr(int(m.group(1))), html.strip())
     match = _OUTER_P.match(html)
     if match and "<p>" not in match.group(1):
         html = match.group(1)
-    parts = _CODE_TEXT.split(html)
+    return html
+
+
+def squash_html(html: str) -> str:
+    """Normalize rendered HTML for comparison.
+
+    Drops whitespace (incl. no-break) *outside* code from :func:`exact_html`,
+    so spaces the fixer inserts next to a span do not matter. Text inside
+    ``<tt>`` and ``<pre>`` is compared exactly: a space inserted into code
+    changes what the reader sees.
+    """
+    parts = _CODE_TEXT.split(exact_html(html))
     return "".join(
         part if index % 2 else _WHITESPACE.sub("", part)
         for index, part in enumerate(parts)
     )
+
+
+def comparable(case: Case, html: str) -> str:
+    """``html`` normalized the way ``case`` is compared: exactly or squashed."""
+    exact = isinstance(case, LiteralCase) and case.exact
+    return exact_html(html) if exact else squash_html(html)
 
 
 def renders_literal_braces(html: str) -> bool:

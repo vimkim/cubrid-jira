@@ -44,7 +44,9 @@ converted output is looked up in
 that `jira.cubrid.org` rendered for it. The comparison ignores whitespace
 outside code, so spaces the fixer inserts next to a span are fine. Text inside
 `<tt>` and `<pre>` must match exactly, so a space inserted into code fails.
-Lost or changed markup fails too.
+A `HOSTILE` case that sets `exact=True` also keeps the whitespace outside code,
+for a defect that is a stray space in the prose, such as ``\`a\`b`` becoming
+"`a` b". Lost or changed markup fails too.
 
 The tests also check that `find_markup_contacts` flags exactly the
 markup that Jira renders with a literal `{{` or `}}`, and that identifiers such

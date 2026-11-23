@@ -60,7 +60,7 @@ def _html_for(snapshot: dict[str, str], markup: str) -> str:
 def test_converted_output_renders_as_intended(case, snapshot):
     converted = mc.converted(case)
     html = _html_for(snapshot, converted)
-    assert mc.squash_html(html) == mc.squash_html(case.expected_html), (
+    assert mc.comparable(case, html) == mc.comparable(case, case.expected_html), (
         f"\n  source:    {case.source!r}"
         f"\n  converted: {converted!r}"
         f"\n  rendered:  {html!r}"
@@ -91,6 +91,19 @@ def test_comparison_sees_a_space_inside_code_but_not_outside_it():
     )
     assert squash("<p>a <tt>x</tt> b</p>") == squash("<p>a<tt>x</tt>b</p>")
     assert squash("<p><tt>x&#42;y</tt> 2&#42;3</p>") == squash("<p><tt>x*y</tt> 2*3</p>")
+
+
+def test_the_escaped_backticks_case_fails_on_the_round_one_render():
+    """Round 1 turned ``\\`a\\`b`` into "`a` b" (checked live). The extra space sits
+    outside code, where squashing hides it, so that case compares exactly."""
+    case = next(c for c in mc.HOSTILE if c.id == "markdown:hostile:escaped-backticks")
+    round_one = "<p>quote with `a` b here</p>"
+
+    assert mc.squash_html(round_one) == mc.squash_html(case.expected_html)
+    assert mc.comparable(case, round_one) != mc.comparable(case, case.expected_html)
+    assert mc.comparable(case, case.expected_html) == mc.comparable(
+        case, "<p>quote with `a`b here</p>"
+    )
 
 
 def test_literal_braces_inside_a_code_panel_are_not_a_rendering_failure():
