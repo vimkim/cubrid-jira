@@ -43,9 +43,16 @@ def test_markdown_cases_are_skipped_when_the_pandoc_version_differs():
     assert "2.14.0.3" in reason and "3.1.2" in reason
 
 
-def test_markdown_cases_run_when_the_version_matches_or_none_is_recorded():
+def test_markdown_cases_run_when_the_version_matches():
     assert rs.markdown_skip_reason("2.14.0.3", "2.14.0.3") is None
-    assert rs.markdown_skip_reason("2.14.0.3", None) is None
+
+
+def test_markdown_cases_are_skipped_when_the_snapshot_records_no_pandoc():
+    """A ``"pandoc": null`` snapshot says nothing about which pandoc wrote its keys."""
+    reason = rs.markdown_skip_reason("2.14.0.3", None)
+
+    assert reason is not None
+    assert "no pandoc version" in reason and "2.14.0.3" in reason
 
 
 def test_markdown_cases_are_skipped_without_a_pandoc_that_reads_jira():
@@ -105,3 +112,19 @@ def test_adopt_pandoc_cannot_record_a_pandoc_that_is_missing():
 
     assert skipped is not None
     assert new.pandoc == "2.14.0.3" and "md-old" in new.renders
+
+
+def test_a_null_snapshot_skips_markdown_on_refresh_until_a_pandoc_is_adopted():
+    null = rs.Snapshot(None, {"jira": "<p>j</p>"})
+
+    new, rendered, skipped = rs.refresh_snapshot(
+        null, "2.14.0.3", needed, render=fake_render
+    )
+    assert "no pandoc version" in skipped
+    assert rendered == 1 and new.pandoc is None and "md-new" not in new.renders
+
+    adopted, rendered, skipped = rs.refresh_snapshot(
+        null, "2.14.0.3", needed, adopt=True, render=fake_render
+    )
+    assert skipped is None and rendered == 2
+    assert adopted.pandoc == "2.14.0.3" and "md-new" in adopted.renders

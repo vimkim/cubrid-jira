@@ -59,6 +59,42 @@ def _pandoc_version() -> str | None:
 PANDOC_VERSION = _pandoc_version()
 
 
+def _skip_reason(report) -> str:
+    longrepr = report.longrepr
+    message = longrepr[2] if isinstance(longrepr, tuple) else str(longrepr)
+    return message.removeprefix("Skipped: ")
+
+
+def pytest_terminal_summary(terminalreporter) -> None:
+    """Say so when the render oracle skipped its Markdown cases.
+
+    The repo's ``-q`` addopts hides pytest's skip summary, and a skipped
+    oracle is a weaker oracle, so this prints one line with the count and the
+    reason, which names both pandoc versions.
+    """
+    import render_snapshot  # it imports this module, so not at the top
+
+    reason = render_snapshot.markdown_skip_reason(
+        PANDOC_VERSION, render_snapshot.load_snapshot().pandoc
+    )
+    if reason is None:
+        return
+    skipped = sum(
+        _skip_reason(report) == reason
+        for report in terminalreporter.stats.get("skipped", [])
+    )
+    if skipped:
+        hint = (
+            " Run `just render-snapshot --adopt-pandoc` to record this pandoc."
+            if PANDOC_VERSION
+            else ""
+        )
+        terminalreporter.write_line(
+            f"render oracle: {skipped} Markdown tests skipped, {reason}.{hint}",
+            yellow=True,
+        )
+
+
 @pytest.fixture(autouse=True)
 def _stub_credentials(monkeypatch, request):
     """Make sure auth.resolve_credentials() never touches the user's real netrc.

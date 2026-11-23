@@ -10,8 +10,9 @@ Markdown cases' keys. Offline tests read the snapshot; this script is the only
 code that needs the network. Rerunning it renders nothing new. Entries nothing
 needs any more are dropped.
 
-With a different pandoc than the recorded one, or none that reads Jira, the
-Markdown cases are skipped: nothing is dropped and the recorded version stays.
+With a different pandoc than the recorded one, with none recorded (a snapshot
+whose ``"pandoc"`` is null), or with none that reads Jira, the Markdown cases
+are skipped: nothing is dropped and the recorded version stays.
 ``--adopt-pandoc`` records the local pandoc instead and drops the Markdown
 entries it does not need.
 
@@ -80,10 +81,15 @@ def markdown_skip_reason(local: str | None, recorded: str | None) -> str | None:
     """Why the Markdown cases cannot use the snapshot here, or None when they can.
 
     Their keys are what pandoc wrote, and another version may write other text.
+    A snapshot that records no version cannot vouch for any, so it skips too.
     """
     if local is None:
         return "pandoc lacks Jira formats"
-    if recorded is not None and recorded != local:
+    if recorded is None:
+        return (
+            f"the snapshot records no pandoc version, this machine has pandoc {local}"
+        )
+    if recorded != local:
         return (
             f"the snapshot was recorded with pandoc {recorded}, "
             f"this machine has pandoc {local}"

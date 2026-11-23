@@ -67,10 +67,15 @@ sample again and fails if the server's answers have drifted from the snapshot.
 The snapshot file records the pandoc version that wrote the Markdown cases'
 keys (`"pandoc"`, next to `"renders"`). Another pandoc version may write other
 text, so on a machine with a different version the Markdown cases are skipped,
-and the skip reason names both versions. They are not failures. The same rule
-applies to the script: with a different version, or no pandoc that reads Jira,
-it renders only the other cases, drops nothing, and keeps the recorded
-version. To move the snapshot to your pandoc, run
+and the skip reason names both versions. They are not failures. A snapshot that
+records no version (`"pandoc": null`) skips them too. Pytest's `-q` hides its
+skip summary, so `tests/conftest.py` prints one line at the end of the run, such
+as `render oracle: 882 Markdown tests skipped, the snapshot was recorded with
+pandoc 2.14.0.3, this machine has pandoc 3.1.2`. Those cases did not check
+anything in that run. The same rule applies to the script: with a different version,
+none recorded, or no pandoc that reads Jira, it renders only the other cases,
+drops nothing, and keeps the recorded version. To move the snapshot to your
+pandoc, run
 `just render-snapshot --adopt-pandoc`. It records your version and drops the
 Markdown entries it does not need, so run it on purpose, then commit the file.
 The current snapshot was written by pandoc 2.14.0.3.
