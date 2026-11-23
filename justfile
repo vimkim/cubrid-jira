@@ -49,6 +49,10 @@ test *args:
 test-live *args:
     uv run python -m pytest -m live "$@"
 
+# Re-render the markup oracle cases with Jira's renderer (needs network; renders only what is missing).
+render-snapshot *args:
+    uv run python tests/render_snapshot.py "$@"
+
 # Run tests and check the local CLI starts (no live JIRA requests).
 check: test
     uv run cubrid-jira --help

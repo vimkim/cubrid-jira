@@ -1,0 +1,108 @@
+"""Check generated markup against Jira's real renderer.
+
+The expectation for each case comes from its spec (``markup_cases``), never
+from the code under test. The renderer's answers are recorded in
+``tests/data/jira_render_snapshot.json`` so these tests run offline. Refresh
+the snapshot with ``just render-snapshot`` when cases, the normalizer's output,
+or the pandoc version change.
+"""
+
+from __future__ import annotations
+
+import re
+import subprocess
+
+import pytest
+
+import markup_cases as mc
+import render_snapshot as rs
+from conftest import PANDOC_HAS_JIRA
+from cubrid_jira.cli import _convert_jira_body
+from cubrid_jira.spacing import find_korean_markup_contacts
+
+requires_pandoc = pytest.mark.skipif(
+    not PANDOC_HAS_JIRA, reason="pandoc lacks Jira formats"
+)
+
+
+def _marks(case: mc.Case):
+    return [requires_pandoc] if mc.needs_pandoc(case) else []
+
+
+CASES = [pytest.param(case, id=case.id, marks=_marks(case)) for case in mc.all_cases()]
+MARKUPS = [
+    pytest.param(case, label, id=f"{case.id}[{label}]", marks=_marks(case))
+    for case in mc.all_cases()
+    for label in mc.labels(case)
+]
+
+
+@pytest.fixture(scope="module")
+def snapshot() -> dict[str, str]:
+    return rs.load_snapshot()
+
+
+def _html_for(snapshot: dict[str, str], markup: str) -> str:
+    if markup not in snapshot:
+        pytest.fail(f"no rendered HTML for {markup!r}; run `just render-snapshot`")
+    return snapshot[markup]
+
+
+@pytest.mark.parametrize("case", CASES)
+def test_converted_output_renders_as_intended(case, snapshot):
+    converted = mc.converted(case)
+    html = _html_for(snapshot, converted)
+    assert mc.squash_html(html) == mc.squash_html(case.expected_html), (
+        f"\n  source:    {case.source!r}"
+        f"\n  converted: {converted!r}"
+        f"\n  rendered:  {html!r}"
+        f"\n  expected:  {case.expected_html!r}"
+    )
+
+
+@pytest.mark.parametrize("case, label", MARKUPS)
+def test_detector_agrees_with_renderer(case, label, snapshot):
+    """The detector must flag exactly the markup that Jira renders with ``{{``/``}}``."""
+    markup = mc.markup(case, label)
+    html = _html_for(snapshot, markup)
+    flagged = bool(find_korean_markup_contacts(markup))
+    literal = mc.renders_literal_braces(html)
+    assert flagged == literal, (
+        f"\n  markup:   {markup!r}"
+        f"\n  detector: {'flags it' if flagged else 'finds nothing'}"
+        f"\n  rendered: {html!r}"
+    )
+
+
+@pytest.mark.parametrize("text", mc.IDENTIFIERS)
+def test_identifiers_pass_through_unchanged(text):
+    assert _convert_jira_body(text, "jira") == text
+
+
+@requires_pandoc
+def test_markdown_specs_mean_what_they_say():
+    """Pandoc reads each Markdown source as the spec's chain (guards the harness)."""
+    specs = [c for c in mc.all_cases() if c.input_format == "markdown"]
+    html = subprocess.run(
+        ["pandoc", "--from", "markdown", "--to", "html"],
+        input="\n\n".join(c.source for c in specs),
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    paragraphs = re.findall(r"<p>(.*?)</p>", html, re.DOTALL)
+    assert len(paragraphs) == len(specs)
+    renames = {"strong": "b", "code": "tt"}
+    for spec, paragraph in zip(specs, paragraphs):
+        paragraph = re.sub(
+            r"<(/?)(strong|code)>", lambda m: f"<{m[1]}{renames[m[2]]}>", paragraph
+        )
+        assert mc.squash_html(paragraph) == mc.squash_html(spec.expected_html), spec.id
+
+
+@pytest.mark.live
+def test_snapshot_matches_the_live_renderer(snapshot):
+    """A sample of the snapshot still renders the same: detects server drift."""
+    keys = sorted(snapshot)
+    for markup in keys[:: max(1, len(keys) // 40)]:
+        assert rs.render_one(markup) == snapshot[markup], markup

@@ -27,6 +27,35 @@ uv run pytest -m live
 or remove a flag, that test names each doc line that still uses it. Put a
 synopsis with placeholders, such as `[--parent KEY]`, in a `text` block.
 
+## Check markup against Jira's renderer
+
+`tests/test_render_oracle.py` checks the write path against the real Jira
+renderer instead of hand-guessed expectations. `tests/markup_cases.py`
+generates a few hundred small cases from a spec (a chain of inline markers,
+such as bold around code, plus the character that touches each marker). The
+spec alone yields the Markdown source, the Jira source, and the HTML Jira must
+render. Each case's converted output is looked up in
+`tests/data/jira_render_snapshot.json`, a recorded map from markup to the HTML
+that `jira.cubrid.org` rendered for it. The comparison ignores whitespace, so
+spaces the fixer inserts are fine but lost or changed markup is not.
+
+The tests also check that `find_korean_markup_contacts` flags exactly the
+markup that Jira renders with a literal `{{` or `}}`, and that identifiers such
+as `foo_bar_baz` pass through unchanged. These tests read the snapshot, so they
+need no network.
+
+Refresh the snapshot with `just render-snapshot` when you:
+
+- add or change cases in `tests/markup_cases.py`,
+- change what the normalizer or the Markdown conversion outputs, or
+- run a different pandoc version (pandoc 2.14 wrote the current snapshot).
+
+The script renders only the markup the snapshot lacks, drops entries nothing
+uses any more, and rerunning it renders nothing new. Add `--all` to render
+everything again. It needs network access but not credentials, and it stops on
+a 401 without retrying. `uv run pytest -m live -k snapshot_matches` renders a
+sample again and fails if the server's answers have drifted from the snapshot.
+
 ## Use just
 
 The `justfile` wraps the common commands. Run `just` to list them.
@@ -37,6 +66,7 @@ The `justfile` wraps the common commands. Run `just` to list them.
 | `just check` | Runs the non-live tests and checks that the CLI starts. |
 | `just test -k server` | Runs pytest with your options. |
 | `just test-live` | Runs only the live read-only tests. |
+| `just render-snapshot` | Renders new markup oracle cases with Jira and updates the snapshot. |
 | `just install` | Installs a global command that follows edits in this checkout. |
 | `just install-copy` | Installs an independent global copy. Rerun it after source changes. |
 | `just repair-install` | Points the global command at this checkout again after you move it. |
