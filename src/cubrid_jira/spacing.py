@@ -36,11 +36,17 @@ CODE_MASK = "\0"
 # A {code} or {noformat} tag, with or without parameters ({code:java},
 # {noformat:title=T}). Jira does not read a tag with a brace right next to it
 # as a macro: {{code}} is monospace text. Only the bare tag of the same name
-# closes a macro.
-JIRA_MACRO_OPEN_RE = re.compile(r"(?<!\{)\{(code|noformat)(?::[^}\n]*)?\}(?!\})")
-JIRA_MACRO_CLOSE_RE = {
-    name: re.compile(rf"(?<!\{{)\{{{name}\}}(?!\}})") for name in ("code", "noformat")
-}
+# closes a macro. Jira reads the name in any case ({Code}, {NOFORMAT}), but only
+# the same spelling closes it: {CODE}...{code} is two unclosed tags.
+JIRA_MACRO_OPEN_RE = re.compile(
+    r"(?<!\{)\{(code|noformat)(?::[^}\n]*)?\}(?!\})", re.IGNORECASE
+)
+
+
+def _macro_close_re(name: str) -> re.Pattern[str]:
+    """The bare tag that closes a macro opened with this exact spelling."""
+    return re.compile(rf"(?<!\{{)\{{{re.escape(name)}\}}(?!\}})")
+
 FENCE_RE = re.compile(r"^\s*(```|~~~)")
 
 
@@ -157,7 +163,7 @@ def _verbatim_ranges(
             start, end = fence[0], closing[1] if closing else len(text)
         elif opening:
             closing = _find_tag(
-                JIRA_MACRO_CLOSE_RE[opening.group(1)], text, opening.end()
+                _macro_close_re(opening.group(1)), text, opening.end()
             )
             start, end = opening.start(), (closing or opening).end()
         else:

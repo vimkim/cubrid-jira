@@ -70,8 +70,8 @@ do not loosen the check.
 The fixer and the detector share two helpers: `spacing.is_word_char` (a letter
 or an Nd digit, not `str.isalnum`) and `spacing._prose_spans` (prose outside
 `{code}`/`{noformat}`, even when a macro opens or closes mid-line). Tags pair in
-order over the whole body, as Jira pairs them: only a bare tag of the same name
-closes a block, a tag after an odd run of backslashes is text, and a tag with
+order over the whole body, as Jira pairs them: the name matches in any case,
+only a bare tag with the opener's exact spelling closes a block, a tag after an odd run of backslashes is text, and a tag with
 no later closer opens nothing (Jira renders an empty panel and reads on), so
 the text after it stays prose for the fixer and the detector. Code spans
 are masked before `*bold*`/`_emphasis_` are matched. `tests/test_render_oracle.py`

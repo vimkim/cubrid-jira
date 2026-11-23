@@ -463,6 +463,19 @@ HOSTILE: tuple[LiteralCase, ...] = (
         "{code}a{noformat}b{code} {{x}}값",
         _CODE_PANEL.format("a{noformat}b") + "<p> <tt>x</tt> 값</p>",
     ),
+    # Jira matches the tag name in any case, but only the same spelling closes
+    # it: {Code}...{Code} is one block, {CODE}...{code} two unclosed panels.
+    LiteralCase(
+        "jira:hostile:code-tag-capitalized",
+        "{Code}a{{b}}c{Code} {{y}}값",
+        _CODE_PANEL.format("a{{b}}c") + "<p> <tt>y</tt> 값</p>",
+    ),
+    LiteralCase(
+        "jira:hostile:code-tag-case-mismatch",
+        "{CODE}a{{b}}c{code} {{y}}값",
+        _CODE_PANEL.format("") + "<p>a <tt>b</tt> c</p>"
+        + _CODE_PANEL.format("") + "<p> <tt>y</tt> 값</p>",
+    ),
     LiteralCase(
         "jira:hostile:noformat-with-title",
         "{noformat:title=T}a{{b}}c{noformat} {{y}}값",

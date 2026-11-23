@@ -386,7 +386,8 @@ The conversion handles these cases:
   stay literal.
   `{code}` and `{noformat}` content is left alone, wherever the tag sits in
   the line. Tags pair in order over the whole body, as JIRA pairs them, and
-  only a bare tag of the same name closes a block. A tag after a backslash,
+  only a bare tag of the same name closes a block. The name matches in any
+  case (`{Code}`), but the closing tag must repeat the opener's spelling. A tag after a backslash,
   as in `\{code}`, is text. A tag with no closing tag, such as a macro name
   mentioned in a sentence, opens no block: JIRA shows an empty panel and goes
   on reading, so the text after it still gets the spacing fix and the check.
