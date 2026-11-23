@@ -1,6 +1,5 @@
 import pytest
 
-from cubrid_jira.markdown import normalize_markdown_inline_spacing
 from cubrid_jira.spacing import find_markup_contacts, normalize_jira_inline_spacing
 
 
@@ -55,16 +54,6 @@ def test_normalize_jira_code_span_nested_in_bold():
 
     assert normalize_jira_inline_spacing(text) == (
         "* *{{REC_HOME}} 이 아닌 행.* 병합은 *한국 {{x}} 값* 끝"
-    )
-
-
-def test_normalize_markdown_code_span_nested_in_bold():
-    from cubrid_jira.markdown import normalize_markdown_inline_spacing
-
-    text = "- **`REC_HOME`이 아닌 행.** 끝 *한국`xy`값*"
-
-    assert normalize_markdown_inline_spacing(text) == (
-        "- **`REC_HOME` 이 아닌 행.** 끝 *한국 `xy` 값*"
     )
 
 
@@ -173,27 +162,3 @@ def test_find_contacts_flags_latin_and_digit_neighbors():
         (2, 2, "{{"),
         (3, 4, "}}"),
     ]
-
-
-@pytest.mark.parametrize(
-    "markdown, expected",
-    [
-        ("a`x`b", "a `x` b"),
-        ("`x`7", "`x` 7"),
-        ("`x`값", "`x` 값"),
-        ("`a` and `b`", "`a` and `b`"),
-        ("`a`, `b`.", "`a`, `b`."),
-    ],
-)
-def test_normalize_markdown_spaces_code_span_from_any_letter_or_digit(
-    markdown, expected
-):
-    assert normalize_markdown_inline_spacing(markdown) == expected
-
-
-def test_normalize_markdown_leaves_bold_and_italic_hangul_only():
-    text = "값**강조**값 b**bold**c x*it*y"
-
-    assert normalize_markdown_inline_spacing(text) == (
-        "값 **강조** 값 b**bold**c x*it*y"
-    )

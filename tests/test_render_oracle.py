@@ -28,8 +28,6 @@ requires_pandoc = pytest.mark.skipif(
 # Oracle failures that a later commit fixes: (test name, param id) -> reason.
 # The xfail is strict, so the commit that fixes one must delete its entry.
 KNOWN_BROKEN: dict[tuple[str, str], str] = {
-    ("converted", "markdown:hostile:double-backtick-code-with-backtick"):
-        "finding 1: Markdown-stage spacing puts a space inside the code span",
     ("converted", "jira:hostile:code-macro-on-one-line"):
         "finding 2: one-line {code} content is spaced",
     ("converted", "jira:hostile:noformat-macro-on-one-line"):

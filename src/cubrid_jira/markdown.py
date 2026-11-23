@@ -18,18 +18,8 @@ import subprocess
 import sys
 
 from cubrid_jira.server import DEFAULT_SERVER, normalize_server
-from cubrid_jira.spacing import is_hangul_char, normalize_jira_inline_spacing
+from cubrid_jira.spacing import normalize_jira_inline_spacing
 
-# The code alternative also matches one character; its lazy "??" keeps the
-# first closing backtick for `a` and `b` instead of running on to the last.
-MARKDOWN_INLINE_RE = re.compile(
-    r"""
-    (?<!\*)\*\*([^\n]*?[^\s*])\*\*(?!\*)      |   # **bold**
-    (?<!\*)\*([^\s*\n][^\n]*?[^\s*])\*(?!\*) |   # *italic*
-    `([^\s`\n](?:[^\n]*?[^\s`])??)`              # `code`
-    """,
-    re.VERBOSE,
-)
 MARKDOWN_FENCE_RE = re.compile(r"^\s*(```|~~~)")
 MARKDOWN_FENCE_OPEN_RE = re.compile(
     r"^[ \t]*(?P<marker>`{3,}|~{3,})(?P<info>[^\r\n]*)(?:\r?\n)?$"
@@ -142,83 +132,6 @@ def jira_to_markdown(text: str) -> str:
         return text
 
     return result.stdout.replace(escaped_pipe_token, r"\|").strip("\n")
-
-
-def _normalize_markdown_span(span: str) -> str:
-    if span.startswith("**") and span.endswith("**"):
-        return f"**{span[2:-2].strip()}**"
-    if span.startswith("*") and span.endswith("*"):
-        return f"*{span[1:-1].strip()}*"
-    if span.startswith("`") and span.endswith("`"):
-        return f"`{span[1:-1].strip()}`"
-    return span
-
-
-def _fix_markdown_inline_spacing(text: str) -> str:
-    result: list[str] = []
-    last = 0
-
-    for match in MARKDOWN_INLINE_RE.finditer(text):
-        start, end = match.span()
-        span = _normalize_markdown_span(match.group(0))
-        if not span.startswith("`"):
-            # Bold/italic: also space the code spans nested inside it.
-            marker = "**" if span.startswith("**") else "*"
-            inner = _fix_markdown_inline_spacing(span[len(marker):-len(marker)])
-            span = f"{marker}{inner}{marker}"
-
-        result.append(text[last:start])
-
-        prev_char = text[start - 1] if start > 0 else ""
-        next_char = text[end] if end < len(text) else ""
-        # Code breaks next to any letter or digit; bold/italic only next to Hangul.
-        touches = str.isalnum if span.startswith("`") else is_hangul_char
-
-        if touches(prev_char) and not result[-1].endswith(" "):
-            result.append(" ")
-
-        result.append(span)
-
-        if touches(next_char):
-            result.append(" ")
-
-        last = end
-
-    result.append(text[last:])
-    return "".join(result)
-
-
-def normalize_markdown_inline_spacing(text: str) -> str:
-    """Insert spaces between Markdown inline spans and the text they touch.
-
-    Code spans get a space from any adjacent letter or digit; bold and italic
-    only from adjacent Hangul.
-
-    Fenced code blocks are left unchanged.
-    """
-    result: list[str] = []
-    fence_marker = ""
-
-    for line in text.splitlines(keepends=True):
-        content = line.rstrip("\r\n")
-        newline = line[len(content):]
-        fence_match = MARKDOWN_FENCE_RE.match(content)
-
-        if fence_match:
-            marker = fence_match.group(1)
-            if not fence_marker:
-                fence_marker = marker
-            elif marker == fence_marker:
-                fence_marker = ""
-            result.append(line)
-            continue
-
-        if fence_marker:
-            result.append(line)
-        else:
-            result.append(_fix_markdown_inline_spacing(content) + newline)
-
-    return "".join(result)
 
 
 def sanitize_markdown(text: str) -> str:
@@ -548,8 +461,7 @@ def markdown_to_jira_body(md_text: str) -> str:
     protected_markdown, escaped_pipe_token = _protect_escaped_pipes(
         protected_markdown
     )
-    spaced_markdown = normalize_markdown_inline_spacing(protected_markdown)
-    jira_text = md_to_jira(sanitize_markdown(spaced_markdown))
+    jira_text = md_to_jira(sanitize_markdown(protected_markdown))
     jira_text = jira_text.replace(escaped_pipe_token, "&#124;")
     jira_text = normalize_jira_code_languages(jira_text)
     jira_text = _normalize_fenced_code_placeholders(jira_text, code_replacements)

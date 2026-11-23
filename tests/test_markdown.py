@@ -32,7 +32,7 @@ def test_markdown_to_jira_body_sanitizes_and_postprocesses(monkeypatch):
 
     assert captured == {
         "cmd": ["pandoc", "--from", "markdown", "--to", "jira"],
-        "input": "소개 `code` 의 값\n\n# Title\n\n- item\n",
+        "input": "소개`code`의 값\n\n# Title\n\n- item\n",
         "capture_output": True,
         "text": True,
         "check": True,
@@ -342,3 +342,22 @@ def test_fenced_code_marker_survives_readback_at_start_of_document():
     block = json.loads(parsed.stdout)["blocks"][0]
     assert block["t"] == "CodeBlock"
     assert block["c"][1] == code
+
+
+@pytest.mark.skipif(not PANDOC_HAS_JIRA, reason="pandoc lacks Jira formats")
+@pytest.mark.parametrize(
+    "source, expected",
+    [
+        # Backslash-escaped backticks are not a code span.
+        ("quote with \\`a\\`b here", "quote with `a`b here\n"),
+        # A backtick inside a double-backtick span stays inside it.
+        ("``a`b``값", "{{a`b}} 값\n"),
+        # Pandoc's brace form renders next to Hangul; no spacing is needed.
+        ("**강조**값 and *기울임*값", "{*}강조{*}값 and {_}기울임{_}값\n"),
+        ("값`x`값", "값 {{x}} 값\n"),
+        # A space after the opening ** is literal text in CommonMark.
+        ("x ** bold** y", "x \\*\\* bold\\*\\* y\n"),
+    ],
+)
+def test_markdown_body_is_not_respaced_before_pandoc(source, expected):
+    assert markdown.markdown_to_jira_body(source) == expected

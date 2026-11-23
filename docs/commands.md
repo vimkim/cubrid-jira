@@ -367,10 +367,15 @@ The conversion handles these cases:
 
 - **Inline markup spacing.** JIRA Server shows `{{ }}` as literal braces when
   a letter or digit, in any script, touches it, such as `{{name}}의`,
-  `{{name}}s`, or `b{{name}}`. Both input formats get a spacing fix that adds a
-  space there, including for a `{{ }}` nested in bold or emphasis, such as
-  `*{{name}}의 값*`. Bold and emphasis markers get a space only from Hangul,
-  because `foo_bar_baz` and `a*b*c` are identifiers that JIRA leaves literal.
+  `{{name}}s`, or `b{{name}}`. The spacing fix runs on the Jira markup, so
+  both input formats get the same one. It adds a space there, including for a
+  `{{ }}` nested in bold or emphasis, such as `*{{name}}의 값*`. Bold and
+  emphasis markers get a space only from Hangul, because `foo_bar_baz` and
+  `a*b*c` are identifiers that JIRA leaves literal.
+  Pandoc reads the Markdown as written. A space inside the opening marker, as
+  in `** bold**`, is literal text in CommonMark and is no longer turned into
+  bold. Hangul next to `**강조**값` needs no space, because pandoc writes it as
+  `{*}강조{*}값`, which JIRA renders.
   After the fix, a separate check looks for any `{{` or `}}` that still touches
   a letter or digit. If it finds one, the write stops before sending, dry runs
   included, and stderr names the line and column. Run [`lint`](#lint) to check
