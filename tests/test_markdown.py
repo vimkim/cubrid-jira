@@ -361,3 +361,23 @@ def test_fenced_code_marker_survives_readback_at_start_of_document():
 )
 def test_markdown_body_is_not_respaced_before_pandoc(source, expected):
     assert markdown.markdown_to_jira_body(source) == expected
+
+
+@pytest.mark.skipif(not PANDOC_HAS_JIRA, reason="pandoc lacks Jira formats")
+@pytest.mark.parametrize(
+    "source, expected",
+    [
+        # Pandoc drops the backslash of an intraword \* or \_ because Jira would
+        # not read the pair as markup. What it writes is literal text, so the
+        # Jira-stage fixer must not take it for bold or emphasis and space it.
+        ("값\\*굵게\\*값", "값*굵게*값\n"),
+        ("사용자\\_이름\\_코드", "사용자_이름_코드\n"),
+        ("사용자_이름_코드", "사용자_이름_코드\n"),
+        # Intended emphasis that touches Hangul is already in pandoc's brace form.
+        ("가격*수량*할인", "가격{_}수량{_}할인\n"),
+        # Code still gets its space, and an escape pandoc keeps stays.
+        ("값`x`값 and a \\*b\\* c", "값 {{x}} 값 and a \\*b\\* c\n"),
+    ],
+)
+def test_a_marker_pair_in_pandoc_output_is_never_respaced_as_emphasis(source, expected):
+    assert markdown.markdown_to_jira_body(source) == expected

@@ -371,12 +371,19 @@ The conversion handles these cases:
   `{{n}}²` is neither, renders fine, and gets no space. A brace run such as
   `{{x}}}값` also renders fine: JIRA closes the span at the first `}}`. The
   spacing fix runs on the Jira markup, so
-  both input formats get the same one. It adds a space there, including for a
-  `{{ }}` nested in bold or emphasis, such as `*{{name}}의 값*`. Bold and
-  emphasis markers get a space only from Hangul, because `foo_bar_baz` and
+  both input formats get the same `{{ }}` fix. It adds a space there, including
+  for a `{{ }}` nested in bold or emphasis, such as `*{{name}}의 값*`. With
+  `--from jira`, bold and emphasis markers also get a space from Hangul, because
+  `값*강조*값` is clearly meant as bold and JIRA shows it literally. They get
+  none from Latin letters or digits, because `foo_bar_baz` and
   `a*b*c` are identifiers that JIRA leaves literal. A `*` or `_` inside
   `{{ }}`, as in `{{col_이름}}`, is code text and never pairs with a marker
   outside it.
+  A Markdown body gets no bold or emphasis spacing at all. Pandoc already writes
+  what the author meant in a form JIRA reads (`*x*` at a word boundary,
+  `{*}x{*}` inside a word), so a bare pair that touches Hangul in its output is
+  literal text. `값\*굵게\*값`, `사용자\_이름\_코드`, and `사용자_이름_코드`
+  stay literal.
   `{code}` and `{noformat}` content is left alone, wherever the tag sits in
   the line. Tags pair in order over the whole body, as JIRA pairs them, and
   only a bare tag of the same name closes a block. A tag after a backslash,

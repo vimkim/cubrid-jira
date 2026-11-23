@@ -465,7 +465,8 @@ def markdown_to_jira_body(md_text: str) -> str:
     jira_text = jira_text.replace(escaped_pipe_token, "&#124;")
     jira_text = normalize_jira_code_languages(jira_text)
     jira_text = _normalize_fenced_code_placeholders(jira_text, code_replacements)
-    jira_text = normalize_jira_inline_spacing(jira_text)
+    # Pandoc already wrote any intended bold or emphasis in a form Jira reads.
+    jira_text = normalize_jira_inline_spacing(jira_text, emphasis=False)
     return _restore_fenced_code_contents(jira_text, code_replacements)
 
 

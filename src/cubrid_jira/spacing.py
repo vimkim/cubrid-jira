@@ -8,7 +8,9 @@ so those two marker kinds are not spaced from Latin letters or digits. A ``*``
 or ``_`` opens or closes a span only at a line edge, next to a character that
 is not part of a word, or next to Hangul. ``{{ }}`` spans are found first and
 masked, so no marker pairs across a code boundary. Raw Jira write bodies and
-Markdown-converted write bodies both pass through this helper before upload.
+Markdown-converted write bodies both pass through this helper before upload;
+the Markdown path leaves bold and emphasis alone (``emphasis=False``) because
+pandoc already writes those in a form Jira reads.
 """
 
 from __future__ import annotations
@@ -90,7 +92,7 @@ def _space_emphasis(masked: str, start: int, end: int, gaps: set[int]) -> None:
         pos = last
 
 
-def _fix_inline_spacing(text: str) -> str:
+def _fix_inline_spacing(text: str, emphasis: bool) -> str:
     # ``gaps`` holds the offsets that get a space in front of them.
     gaps: set[int] = set()
 
@@ -102,8 +104,9 @@ def _fix_inline_spacing(text: str) -> str:
         if last < len(text) and is_word_char(text[last]):
             gaps.add(last)
 
-    masked = CODE_SPAN_RE.sub(lambda m: CODE_MASK * len(m.group()), text)
-    _space_emphasis(masked, 0, len(masked), gaps)
+    if emphasis:
+        masked = CODE_SPAN_RE.sub(lambda m: CODE_MASK * len(m.group()), text)
+        _space_emphasis(masked, 0, len(masked), gaps)
 
     return "".join(" " + ch if index in gaps else ch for index, ch in enumerate(text))
 
@@ -204,11 +207,15 @@ def _prose_spans(text: str) -> Iterator[tuple[int, str, str, list[tuple[int, int
         yield number, content, newline, spans
 
 
-def normalize_jira_inline_spacing(text: str) -> str:
+def normalize_jira_inline_spacing(text: str, *, emphasis: bool = True) -> str:
     """Insert spaces between Jira inline markup and the text it touches.
 
     ``{{ }}`` gets a space from any adjacent letter or digit; bold and emphasis
-    only from adjacent Hangul.
+    only from adjacent Hangul. ``emphasis=False`` spaces ``{{ }}`` only. Use it
+    on pandoc's output: pandoc writes the bold or emphasis a Markdown author
+    meant as ``*x*`` at a word boundary or as ``{*}x{*}`` inside a word, and
+    drops the backslash of a literal intraword ``\\*`` or ``\\_``. A bare pair
+    that touches Hangul there is literal text, not a span to space.
 
     Code/noformat blocks and Markdown-style fenced blocks are left unchanged,
     including a macro that opens or closes in the middle of a line.
@@ -218,7 +225,7 @@ def normalize_jira_inline_spacing(text: str) -> str:
         pos = 0
         for start, end in spans:
             result.append(content[pos:start])
-            result.append(_fix_inline_spacing(content[start:end]))
+            result.append(_fix_inline_spacing(content[start:end], emphasis))
             pos = end
         result.append(content[pos:] + newline)
     return "".join(result)

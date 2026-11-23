@@ -395,3 +395,15 @@ def test_an_unclosed_tag_is_zero_width_and_its_line_stays_prose_on_both_sides():
         (1, "}}"),
         (2, "}}"),
     ]
+
+
+def test_emphasis_off_spaces_code_spans_and_leaves_marker_pairs_alone():
+    text = "값*굵게*값 사용자_이름_코드 한국{{x}}값 *강조*값"
+
+    assert normalize_jira_inline_spacing(text, emphasis=False) == (
+        "값*굵게*값 사용자_이름_코드 한국 {{x}} 값 *강조*값"
+    )
+    # The default still treats a pair that touches Hangul as intended markup.
+    assert normalize_jira_inline_spacing(text) == (
+        "값 *굵게* 값 사용자 _이름_ 코드 한국 {{x}} 값 *강조* 값"
+    )

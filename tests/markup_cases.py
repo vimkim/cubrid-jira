@@ -332,6 +332,27 @@ HOSTILE: tuple[LiteralCase, ...] = (
         "앞{{a}}값 {code}z{code} 뒤{{b}}값",
         "<p>앞<tt>a</tt>값</p>" + _CODE_PANEL.format("z") + "<p>뒤<tt>b</tt>값</p>",
     ),
+    # Literal stars and underscores between Hangul. Pandoc writes them bare
+    # (it drops the backslash), and Jira leaves a bare pair next to Hangul
+    # literal, so the Markdown path must not read them as bold or emphasis.
+    LiteralCase(
+        "markdown:hostile:escaped-stars-between-hangul",
+        "값\\*굵게\\*값",
+        "<p>값*굵게*값</p>",
+        "markdown",
+    ),
+    LiteralCase(
+        "markdown:hostile:escaped-underscores-between-hangul",
+        "사용자\\_이름\\_코드",
+        "<p>사용자_이름_코드</p>",
+        "markdown",
+    ),
+    LiteralCase(
+        "markdown:hostile:snake-case-between-hangul",
+        "사용자_이름_코드",
+        "<p>사용자_이름_코드</p>",
+        "markdown",
+    ),
     LiteralCase(
         "jira:hostile:superscript-after-code",
         "{{x}}²",

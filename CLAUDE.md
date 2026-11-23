@@ -54,6 +54,11 @@ JIRA Server renders `{{x}}` literally when the character just outside it is a
 letter or digit in any script (`{{x}}의`, `b{{x}}`, `{{x}}7`). Bold and
 emphasis fail the same way only next to Hangul; `foo_bar_baz` and `a*b*c` are
 identifiers that Jira leaves literal, so the fixer does not touch them.
+The Markdown path passes `emphasis=False`: pandoc already writes intended bold
+and emphasis as `*x*` at a word boundary or `{*}x{*}` inside a word, so a bare
+`*`/`_` pair touching Hangul in its output is literal (`값\*굵게\*값`,
+`사용자_이름_코드`) and only `{{ }}` is spaced. Raw `--from jira` keeps the
+Hangul bold/emphasis spacing.
 Writes run `spacing.normalize_jira_inline_spacing` (auto-fix), then
 `spacing.check_inline_markup` (refuse, exit 1). The check uses its own regex
 (`CONTACT_RE`), deliberately independent of the fixer's span matching, so a

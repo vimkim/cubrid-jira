@@ -693,6 +693,8 @@
   "{{x}}값": "<p>{{x}}값</p>",
   "| {{COUNT(*)}} 가 START WITH 키 개수를 반환 |": "<div class='table-wrap'>\n<table class='confluenceTable'><tbody>\n<tr>\n<td class='confluenceTd'> <tt>COUNT<img class=\"emoticon\" src=\"https://jira.cubrid.org/images/icons/emoticons/star_yellow.png\" height=\"16\" width=\"16\" align=\"absmiddle\" alt=\"\" border=\"0\"/></tt> 가 START WITH 키 개수를 반환 </td>\n</tr>\n</tbody></table>\n</div>",
   "| {{COUNT(*)}}가 START WITH 키 개수를 반환 |": "<div class='table-wrap'>\n<table class='confluenceTable'><tbody>\n<tr>\n<td class='confluenceTd'> {{COUNT<img class=\"emoticon\" src=\"https://jira.cubrid.org/images/icons/emoticons/star_yellow.png\" height=\"16\" width=\"16\" align=\"absmiddle\" alt=\"\" border=\"0\"/>}}가 START WITH 키 개수를 반환 </td>\n</tr>\n</tbody></table>\n</div>",
+  "값*굵게*값\n": "<p>값*굵게*값</p>",
+  "사용자_이름_코드\n": "<p>사용자_이름_코드</p>",
   "앞 *_x_*": "<p>앞 <b><em>x</em></b></p>",
   "앞 *_x_* ": "<p>앞 <b><em>x</em></b> </p>",
   "앞 *_x_* 값": "<p>앞 <b><em>x</em></b> 값</p>",
