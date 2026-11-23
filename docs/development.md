@@ -51,15 +51,25 @@ need no network.
 
 Refresh the snapshot with `just render-snapshot` when you:
 
-- add or change cases in `tests/markup_cases.py`,
-- change what the normalizer or the Markdown conversion outputs, or
-- run a different pandoc version (pandoc 2.14 wrote the current snapshot).
+- add or change cases in `tests/markup_cases.py`, or
+- change what the normalizer or the Markdown conversion outputs.
 
 The script renders only the markup the snapshot lacks, drops entries nothing
 uses any more, and rerunning it renders nothing new. Add `--all` to render
 everything again. It needs network access but not credentials, and it stops on
 a 401 without retrying. `uv run pytest -m live -k snapshot_matches` renders a
 sample again and fails if the server's answers have drifted from the snapshot.
+
+The snapshot file records the pandoc version that wrote the Markdown cases'
+keys (`"pandoc"`, next to `"renders"`). Another pandoc version may write other
+text, so on a machine with a different version the Markdown cases are skipped,
+and the skip reason names both versions. They are not failures. The same rule
+applies to the script: with a different version, or no pandoc that reads Jira,
+it renders only the other cases, drops nothing, and keeps the recorded
+version. To move the snapshot to your pandoc, run
+`just render-snapshot --adopt-pandoc`. It records your version and drops the
+Markdown entries it does not need, so run it on purpose, then commit the file.
+The current snapshot was written by pandoc 2.14.0.3.
 
 ## Use just
 

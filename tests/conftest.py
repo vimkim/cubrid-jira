@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import json
+import re
 import shutil
 import subprocess
 import urllib.error
@@ -35,6 +36,27 @@ def _pandoc_has_jira_reader_and_writer() -> bool:
 
 
 PANDOC_HAS_JIRA = _pandoc_has_jira_reader_and_writer()
+
+
+def _pandoc_version() -> str | None:
+    """The local pandoc's version, or None without a pandoc that reads Jira."""
+    if not PANDOC_HAS_JIRA:
+        return None
+    try:
+        first_line = subprocess.run(
+            ["pandoc", "--version"],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=5,
+        ).stdout.splitlines()[0]
+    except (OSError, IndexError, subprocess.SubprocessError):
+        return None
+    match = re.match(r"pandoc(?:\.exe)? (\S+)", first_line)
+    return match.group(1) if match else None
+
+
+PANDOC_VERSION = _pandoc_version()
 
 
 @pytest.fixture(autouse=True)

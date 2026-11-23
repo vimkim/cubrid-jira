@@ -1,12 +1,19 @@
 """Refresh tests/data/jira_render_snapshot.json from Jira's real renderer.
 
-    uv run python tests/render_snapshot.py          # render only what is missing
-    uv run python tests/render_snapshot.py --all    # render everything again
+    uv run python tests/render_snapshot.py                  # render only what is missing
+    uv run python tests/render_snapshot.py --all            # render everything again
+    uv run python tests/render_snapshot.py --adopt-pandoc   # record this machine's pandoc
 
 The snapshot maps each markup string the oracle needs to the HTML that
-jira.cubrid.org renders for it. Offline tests read the snapshot; this script
-is the only code that needs the network. Rerunning it renders nothing new.
-Entries nothing needs any more are dropped.
+jira.cubrid.org renders for it, and records the pandoc version that wrote the
+Markdown cases' keys. Offline tests read the snapshot; this script is the only
+code that needs the network. Rerunning it renders nothing new. Entries nothing
+needs any more are dropped.
+
+With a different pandoc than the recorded one, or none that reads Jira, the
+Markdown cases are skipped: nothing is dropped and the recorded version stays.
+``--adopt-pandoc`` records the local pandoc instead and drops the Markdown
+entries it does not need.
 
 The render API answers anonymously. Credentials are sent only when
 ``resolve_credentials_optional()`` finds some. A 401 stops the run at once:
@@ -23,9 +30,11 @@ import sys
 import urllib.error
 import urllib.request
 from collections.abc import Callable, Iterable
+from dataclasses import dataclass
 from pathlib import Path
 
 import markup_cases
+from conftest import PANDOC_VERSION
 from cubrid_jira.http import JIRA_BASE, basic_auth_header, resolve_credentials_optional
 
 SNAPSHOT_PATH = Path(__file__).parent / "data" / "jira_render_snapshot.json"
@@ -41,20 +50,45 @@ class RenderError(RuntimeError):
         self.code = code
 
 
-def load_snapshot(path: Path = SNAPSHOT_PATH) -> dict[str, str]:
+@dataclass(frozen=True)
+class Snapshot:
+    """Rendered HTML per markup string, plus the pandoc that wrote the Markdown keys."""
+
+    pandoc: str | None
+    renders: dict[str, str]
+
+
+def load_snapshot(path: Path = SNAPSHOT_PATH) -> Snapshot:
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
-        return {}
+        return Snapshot(None, {})
+    return Snapshot(data["pandoc"], data["renders"])
 
 
-def write_snapshot(snapshot: dict[str, str], path: Path = SNAPSHOT_PATH) -> None:
+def write_snapshot(snapshot: Snapshot, path: Path = SNAPSHOT_PATH) -> None:
     """Write sorted JSON through a temp file so a crash never leaves half a file."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    text = json.dumps(snapshot, ensure_ascii=False, indent=1, sort_keys=True) + "\n"
+    data = {"pandoc": snapshot.pandoc, "renders": snapshot.renders}
+    text = json.dumps(data, ensure_ascii=False, indent=1, sort_keys=True) + "\n"
     temp = path.with_name(path.name + ".tmp")
     temp.write_text(text, encoding="utf-8")
     os.replace(temp, path)
+
+
+def markdown_skip_reason(local: str | None, recorded: str | None) -> str | None:
+    """Why the Markdown cases cannot use the snapshot here, or None when they can.
+
+    Their keys are what pandoc wrote, and another version may write other text.
+    """
+    if local is None:
+        return "pandoc lacks Jira formats"
+    if recorded is not None and recorded != local:
+        return (
+            f"the snapshot was recorded with pandoc {recorded}, "
+            f"this machine has pandoc {local}"
+        )
+    return None
 
 
 def render_one(markup: str) -> str:
@@ -117,29 +151,63 @@ def refresh(
     return fresh, len(todo)
 
 
+def refresh_snapshot(
+    old: Snapshot,
+    local_pandoc: str | None,
+    needed: Callable[[bool], Iterable[str]],
+    *,
+    render_all: bool = False,
+    adopt: bool = False,
+    render: Callable[[list[str]], list[str]] = render_batch,
+) -> tuple[Snapshot, int, str | None]:
+    """Return ``(new_snapshot, rendered_count, why_markdown_was_skipped)``.
+
+    ``needed(markdown)`` lists the markups the oracle needs, with or without the
+    Markdown cases. A skipped Markdown run renders only the other cases and
+    prunes nothing, so it never discards entries it chose not to look at.
+    """
+    reason = markdown_skip_reason(local_pandoc, old.pandoc)
+    markdown = reason is None or (adopt and local_pandoc is not None)
+    renders, rendered = refresh(
+        needed(markdown), old.renders, render_all=render_all, prune=markdown, render=render
+    )
+    version = local_pandoc if markdown else old.pandoc
+    return Snapshot(version, renders), rendered, None if markdown else reason
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--all", action="store_true", help="render every markup again")
+    parser.add_argument(
+        "--adopt-pandoc",
+        action="store_true",
+        help="record this machine's pandoc version and drop Markdown entries it does not need",
+    )
     args = parser.parse_args(argv)
 
-    pandoc = markup_cases.PANDOC_HAS_JIRA
-    if not pandoc:
-        print(
-            "pandoc lacks Jira formats: Markdown cases skipped, no entries pruned",
-            file=sys.stderr,
-        )
-    needed = markup_cases.needed_markups(pandoc=pandoc)
     old = load_snapshot()
     try:
-        new, rendered = refresh(needed, old, render_all=args.all, prune=pandoc)
+        new, rendered, skipped = refresh_snapshot(
+            old,
+            PANDOC_VERSION,
+            lambda markdown: markup_cases.needed_markups(pandoc=markdown),
+            render_all=args.all,
+            adopt=args.adopt_pandoc,
+        )
     except RenderError as error:
         print(f"error: {error}", file=sys.stderr)
         return 2 if error.code == 401 else 1
+    if skipped:
+        print(
+            f"Markdown cases skipped, no entries dropped: {skipped}"
+            " (--adopt-pandoc records this pandoc instead)",
+            file=sys.stderr,
+        )
     if new != old:
         write_snapshot(new)
     print(
-        f"snapshot: {len(new)} entries, {rendered} rendered, "
-        f"{len(set(old) - set(new))} dropped",
+        f"snapshot: {len(new.renders)} entries, {rendered} rendered, "
+        f"{len(set(old.renders) - set(new.renders))} dropped",
         file=sys.stderr,
     )
     return 0

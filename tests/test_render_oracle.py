@@ -16,17 +16,25 @@ import pytest
 
 import markup_cases as mc
 import render_snapshot as rs
-from conftest import PANDOC_HAS_JIRA
+from conftest import PANDOC_HAS_JIRA, PANDOC_VERSION
 from cubrid_jira.cli import _convert_jira_body
 from cubrid_jira.spacing import find_markup_contacts
+
+SNAPSHOT = rs.load_snapshot()
 
 requires_pandoc = pytest.mark.skipif(
     not PANDOC_HAS_JIRA, reason="pandoc lacks Jira formats"
 )
+# The Markdown cases' keys are what pandoc wrote; another version may write
+# other text, so the snapshot is not evidence for them.
+_markdown_skip = rs.markdown_skip_reason(PANDOC_VERSION, SNAPSHOT.pandoc)
+markdown_in_snapshot = pytest.mark.skipif(
+    _markdown_skip is not None, reason=_markdown_skip or "snapshot matches pandoc"
+)
 
 
 def _marks(case: mc.Case):
-    return [requires_pandoc] if mc.needs_pandoc(case) else []
+    return [markdown_in_snapshot] if mc.needs_pandoc(case) else []
 
 
 CASES = [pytest.param(case, id=case.id, marks=_marks(case)) for case in mc.all_cases()]
@@ -39,7 +47,7 @@ MARKUPS = [
 
 @pytest.fixture(scope="module")
 def snapshot() -> dict[str, str]:
-    return rs.load_snapshot()
+    return SNAPSHOT.renders
 
 
 def _html_for(snapshot: dict[str, str], markup: str) -> str:
