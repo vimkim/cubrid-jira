@@ -245,6 +245,15 @@ _NOFORMAT_PANEL = (
     '<div class="preformatted panel" style="border-width: 1px;">'
     '<div class="preformattedContent panelContent">\n<pre>{}</pre>\n</div></div>'
 )
+_TITLED_NOFORMAT_PANEL = (
+    '<div class="preformatted panel" style="border-width: 1px;">'
+    '<div class="preformattedHeader panelHeader" style="border-bottom-width: 1px;">'
+    "<b>{title}</b></div>"
+    '<div class="preformattedContent panelContent">\n<pre>{text}</pre>\n</div></div>'
+)
+# What Jira renders for a {code} or {noformat} tag that has no closing tag.
+_EMPTY_CODE = _CODE_PANEL.format("")
+_EMPTY_NOFORMAT = _NOFORMAT_PANEL.format("")
 
 # Code text that is hostile to the inline fixers: underscores, stars, backticks
 # and braces inside code, prose with identifiers before it, and macros that
@@ -357,6 +366,86 @@ HOSTILE: tuple[LiteralCase, ...] = (
         "jira:hostile:brace-run-after-letter",
         "a{{{x}} b",
         "<p>a{<tt>x</tt> b</p>",
+    ),
+    # {code}/{noformat} tags that are not a block. Jira pairs tags in order over
+    # the whole body, reads \{code} as text, and renders a tag with no closing
+    # tag as an empty panel, then keeps reading prose. Expected HTML is the
+    # control render of the same body with the space added by hand.
+    LiteralCase(
+        "jira:hostile:escaped-code-tag-before-code",
+        "Wrap it in \\{code} please.\n{{x}}값",
+        "<p>Wrap it in {code} please.<br/>\n<tt>x</tt> 값</p>",
+    ),
+    LiteralCase(
+        "jira:hostile:mentioned-noformat-tag",
+        "Use the {noformat} macro for logs.\n\n{{x}}값 here",
+        "<p>Use the </p>" + _EMPTY_NOFORMAT
+        + "<p> macro for logs.</p><p><tt>x</tt> 값 here</p>",
+    ),
+    LiteralCase(
+        "jira:hostile:two-mentioned-tags",
+        "The macros {code} and {noformat} are fine.\n{{x}}값",
+        "<p>The macros </p>" + _EMPTY_CODE + "<p> and </p>" + _EMPTY_NOFORMAT
+        + "<p> are fine.<br/>\n<tt>x</tt> 값</p>",
+    ),
+    LiteralCase(
+        "jira:hostile:code-tag-inside-a-word",
+        "a{code}b {{x}}값",
+        "<p>a</p>" + _EMPTY_CODE + "<p>b <tt>x</tt> 값</p>",
+    ),
+    LiteralCase(
+        "jira:hostile:unclosed-code-tag-with-language",
+        "x {code:java} y {{z}}값",
+        "<p>x </p>" + _EMPTY_CODE + "<p> y <tt>z</tt> 값</p>",
+    ),
+    LiteralCase(
+        "jira:hostile:odd-number-of-code-tags",
+        "{code}a{code}b{code} {{x}}값",
+        _CODE_PANEL.format("a") + "<p>b</p>" + _EMPTY_CODE
+        + "<p> <tt>x</tt> 값</p>",
+    ),
+    LiteralCase(
+        "jira:hostile:escaped-noformat-tag",
+        "text \\{noformat} {{x}}값",
+        "<p>text {noformat} <tt>x</tt> 값</p>",
+    ),
+    LiteralCase(
+        "jira:hostile:code-tag-alone-on-its-line-never-closed",
+        "{code}\n{{x}}값",
+        _EMPTY_CODE + "<p><tt>x</tt> 값</p>",
+    ),
+    LiteralCase(
+        "jira:hostile:escaped-closing-tag-inside-code",
+        "{code}a\\{code}b{code} {{x}}값",
+        _CODE_PANEL.format("a\\{code}b") + "<p> <tt>x</tt> 값</p>",
+    ),
+    LiteralCase(
+        "jira:hostile:two-backslashes-are-a-line-break-not-an-escape",
+        "\\\\{code}x{code} {{y}}값",
+        '<p><br class="atl-forced-newline" /></p>' + _CODE_PANEL.format("x")
+        + "<p> <tt>y</tt> 값</p>",
+    ),
+    LiteralCase(
+        "jira:hostile:three-backslashes-escape-the-tag",
+        "\\\\\\{code}x{code} {{y}}값",
+        "<p>\\\\\\{code}x</p>" + _EMPTY_CODE + "<p> <tt>y</tt> 값</p>",
+    ),
+    LiteralCase(
+        "jira:hostile:noformat-tag-inside-code",
+        "{code}a{noformat}b{code} {{x}}값",
+        _CODE_PANEL.format("a{noformat}b") + "<p> <tt>x</tt> 값</p>",
+    ),
+    LiteralCase(
+        "jira:hostile:noformat-with-title",
+        "{noformat:title=T}a{{b}}c{noformat} {{y}}값",
+        _TITLED_NOFORMAT_PANEL.format(title="T", text="a{{b}}c")
+        + "<p> <tt>y</tt> 값</p>",
+    ),
+    LiteralCase(
+        "jira:hostile:unclosed-code-tag-then-more-paragraphs",
+        "text\n{code}\nunclosed {{x}}값\n\nmore {{y}}값",
+        "<p>text</p>" + _EMPTY_CODE
+        + "<p>unclosed <tt>x</tt> 값</p><p>more <tt>y</tt> 값</p>",
     ),
 )
 

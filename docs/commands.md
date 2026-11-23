@@ -377,6 +377,12 @@ The conversion handles these cases:
   `a*b*c` are identifiers that JIRA leaves literal. A `*` or `_` inside
   `{{ }}`, as in `{{col_이름}}`, is code text and never pairs with a marker
   outside it.
+  `{code}` and `{noformat}` content is left alone, wherever the tag sits in
+  the line. Tags pair in order over the whole body, as JIRA pairs them, and
+  only a bare tag of the same name closes a block. A tag after a backslash,
+  as in `\{code}`, is text. A tag with no closing tag, such as a macro name
+  mentioned in a sentence, opens no block: JIRA shows an empty panel and goes
+  on reading, so the text after it still gets the spacing fix and the check.
   Pandoc reads the Markdown as written. A space inside the opening marker, as
   in `** bold**`, is literal text in CommonMark and is no longer turned into
   bold. Hangul next to `**강조**값` needs no space, because pandoc writes it as

@@ -36,7 +36,8 @@ such as bold around code, plus the character that touches each marker). The
 spec alone yields the Markdown source, the Jira source, and the HTML Jira must
 render. A second group of hand-written cases (`HOSTILE`) uses code text that
 fights the fixers: `col_이름` after `my_table의`, `a*b`, backticks and braces
-inside code, a `{code}` macro on the same line as content. Each case's
+inside code, a `{code}` macro on the same line as content, and `{code}` or
+`{noformat}` tags that are escaped, mentioned in prose, or never closed. Each case's
 converted output is looked up in
 `tests/data/jira_render_snapshot.json`, a recorded map from markup to the HTML
 that `jira.cubrid.org` rendered for it. The comparison ignores whitespace

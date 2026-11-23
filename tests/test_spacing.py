@@ -317,3 +317,81 @@ def test_a_real_contact_is_still_flagged_next_to_a_brace_run():
     assert normalize_jira_inline_spacing(text) == (
         "{{x}}}값 and {{y}} 값 and a{{{z}} and b {{w}}"
     )
+
+
+# A {code}/{noformat} tag is a block only when a later bare tag of the same name
+# closes it. Jira pairs tags in order over the whole body, reads \{code} as
+# text, and renders a tag with no closing tag as an empty panel before it goes
+# on reading prose. Each body below ends in prose that Jira renders literally.
+UNCLOSED_OR_ESCAPED = [
+    "Wrap it in \\{code} please.\n{{x}}값",
+    "Use the {noformat} macro for logs.\n\n{{x}}값 here",
+    "The macros {code} and {noformat} are fine.\n{{x}}값",
+    "a{code}b {{x}}값",
+    "x {code:java} y {{z}}값",
+    "{code}a{code}b{code} {{x}}값",
+    "text \\{noformat} {{x}}값",
+    "{code}\n{{x}}값",
+    "{code}a\\{code}b{code} {{x}}값",
+    "\\\\\\{code}x{code} {{y}}값",
+    "{code}a{noformat}b {{x}}값",
+    "{noformat:title=T}a{{b}}c {{y}}값",
+]
+
+
+@pytest.mark.parametrize("text", UNCLOSED_OR_ESCAPED)
+def test_prose_after_an_escaped_or_unclosed_tag_is_still_checked_and_fixed(text):
+    contacts = find_markup_contacts(text)
+
+    assert contacts, "the detector must see the literal braces after the tag"
+    fixed = normalize_jira_inline_spacing(text)
+    assert fixed != text
+    assert find_markup_contacts(fixed) == []
+    # Only whitespace was added.
+    assert fixed.replace(" ", "") == text.replace(" ", "")
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "{code}a\\{code}b{code} {{x}} 값",
+        "\\\\{code}x{code} {{y}} 값",
+        "{code}a{noformat}b{code} {{x}} 값",
+        "{code}a{code:java}b{code} {{x}} 값",
+        "{noformat:title=T}\na{{b}}c\n{noformat}\n{{y}} 값",
+        "{code:title=a|language=sql}\nx{{y}}z\n{code}",
+        "{code}\nx{{y}}z\n{code}\n{code}\nu{{v}}w\n{code}",
+    ],
+)
+def test_tags_pair_in_order_and_only_a_bare_same_name_tag_closes(text):
+    """A paired block hides its content; an escaped tag, another macro's tag and a parameterized tag stay content."""
+    assert normalize_jira_inline_spacing(text) == text
+    assert find_markup_contacts(text) == []
+
+
+def test_an_odd_run_of_backslashes_escapes_a_tag_and_an_even_run_does_not():
+    # Two backslashes are a line break, so the tag is live and pairs with the
+    # closer: the span between them is code. Three escape the first tag, which
+    # leaves the closer to open a block that never closes: the span is prose.
+    even = "\\\\{code}{{y}}z{code}"
+    odd = "\\\\\\{code}{{y}}z{code}"
+
+    assert normalize_jira_inline_spacing(even) == even
+    assert find_markup_contacts(even) == []
+    assert normalize_jira_inline_spacing(odd) == "\\\\\\{code}{{y}} z{code}"
+    assert find_markup_contacts(odd) != []
+
+
+def test_an_unclosed_tag_is_zero_width_and_its_line_stays_prose_on_both_sides():
+    text = "앞{{a}}값 {code} 뒤{{b}}값\n{{c}}값"
+
+    assert normalize_jira_inline_spacing(text) == (
+        "앞 {{a}} 값 {code} 뒤 {{b}} 값\n{{c}} 값"
+    )
+    assert [(c.line, c.marker) for c in find_markup_contacts(text)] == [
+        (1, "{{"),
+        (1, "}}"),
+        (1, "{{"),
+        (1, "}}"),
+        (2, "}}"),
+    ]

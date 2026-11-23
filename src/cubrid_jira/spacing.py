@@ -31,10 +31,11 @@ EMPHASIS_RE = re.compile(
 # Stands in for a {{code}} span while bold and emphasis are matched, so a
 # marker inside code can neither open nor close a span outside it.
 CODE_MASK = "\0"
-# A {code} or {noformat} macro opens anywhere in a line; only the bare
-# {code}/{noformat} of the same name closes it. Jira does not read a tag with a
-# brace right next to it as a macro: {{code}} is monospace text.
-JIRA_MACRO_OPEN_RE = re.compile(r"(?<!\{)\{(code(?::[^}\n]*)?|noformat)\}(?!\})")
+# A {code} or {noformat} tag, with or without parameters ({code:java},
+# {noformat:title=T}). Jira does not read a tag with a brace right next to it
+# as a macro: {{code}} is monospace text. Only the bare tag of the same name
+# closes a macro.
+JIRA_MACRO_OPEN_RE = re.compile(r"(?<!\{)\{(code|noformat)(?::[^}\n]*)?\}(?!\})")
 JIRA_MACRO_CLOSE_RE = {
     name: re.compile(rf"(?<!\{{)\{{{name}\}}(?!\}})") for name in ("code", "noformat")
 }
@@ -107,6 +108,61 @@ def _fix_inline_spacing(text: str) -> str:
     return "".join(" " + ch if index in gaps else ch for index, ch in enumerate(text))
 
 
+def _is_escaped(text: str, index: int) -> bool:
+    """True when an odd run of backslashes ends just before ``text[index]``.
+
+    Jira shows ``\\{code}`` as text. Two backslashes are a line break, so a tag
+    after them is live; three escape it again.
+    """
+    run = 0
+    while index > run and text[index - run - 1] == "\\":
+        run += 1
+    return run % 2 == 1
+
+
+def _find_tag(pattern: re.Pattern[str], text: str, pos: int) -> re.Match[str] | None:
+    """The first match of ``pattern`` at or after ``pos`` that is not escaped."""
+    return next(
+        (m for m in pattern.finditer(text, pos) if not _is_escaped(text, m.start())),
+        None,
+    )
+
+
+def _verbatim_ranges(
+    text: str, fences: list[tuple[int, int, str]]
+) -> list[tuple[int, int]]:
+    """Return the ``(start, end)`` offsets of the text that is not prose, in order.
+
+    Jira pairs ``{code}``/``{noformat}`` tags in order over the whole body: a
+    tag opens a block that a later bare tag of the same name closes, and the
+    tags themselves are not prose. A tag with no closing tag opens nothing:
+    Jira renders an empty panel and reads on, so only the tag is skipped.
+    ``fences`` holds ``(line_start, line_end, marker)`` for each line that
+    starts with a Markdown fence marker. Whichever of a fence and a tag comes
+    first claims the text after it, so a fence marker inside a macro is code.
+    """
+    ranges: list[tuple[int, int]] = []
+    pos = 0
+    index = 0
+    while True:
+        opening = _find_tag(JIRA_MACRO_OPEN_RE, text, pos)
+        while index < len(fences) and fences[index][0] < pos:
+            index += 1
+        fence = fences[index] if index < len(fences) else None
+        if fence and (opening is None or fence[0] <= opening.start()):
+            closing = next((f for f in fences[index + 1:] if f[2] == fence[2]), None)
+            start, end = fence[0], closing[1] if closing else len(text)
+        elif opening:
+            closing = _find_tag(
+                JIRA_MACRO_CLOSE_RE[opening.group(1)], text, opening.end()
+            )
+            start, end = opening.start(), (closing or opening).end()
+        else:
+            return ranges
+        ranges.append((start, end))
+        pos = end
+
+
 def _prose_spans(text: str) -> Iterator[tuple[int, str, str, list[tuple[int, int]]]]:
     """Yield ``(line_number, content, newline, spans)`` for each line.
 
@@ -114,42 +170,37 @@ def _prose_spans(text: str) -> Iterator[tuple[int, str, str, list[tuple[int, int
     Text inside ``{code}``/``{noformat}`` and fenced blocks is not, and neither
     are the macro tags themselves. A macro may open or close anywhere in a line,
     so one line can hold prose before a macro, the macro's content, and prose
-    after it.
+    after it. See :func:`_verbatim_ranges` for how tags pair.
     """
-    macro: str | None = None
-    fence_marker = ""
-
-    for number, line in enumerate(text.splitlines(keepends=True), start=1):
+    lines: list[tuple[int, str, str]] = []
+    offset = 0
+    for line in text.splitlines(keepends=True):
         content = line.rstrip("\r\n")
-        newline = line[len(content):]
+        lines.append((offset, content, line[len(content):]))
+        offset += len(line)
 
-        fence = FENCE_RE.match(content)
-        if fence_marker or (macro is None and fence):
-            if not fence_marker:
-                fence_marker = fence.group(1)
-            elif fence and fence.group(1) == fence_marker:
-                fence_marker = ""
-            yield number, content, newline, []
-            continue
+    fences = [
+        (start, start + len(content), match.group(1))
+        for start, content, _ in lines
+        if (match := FENCE_RE.match(content))
+    ]
+    verbatim = _verbatim_ranges(text, fences)
 
+    index = 0
+    for number, (start, content, newline) in enumerate(lines, start=1):
+        end = start + len(content)
         spans: list[tuple[int, int]] = []
-        pos = 0
-        while True:
-            if macro is None:
-                opening = JIRA_MACRO_OPEN_RE.search(content, pos)
-                end = opening.start() if opening else len(content)
-                if pos < end:
-                    spans.append((pos, end))
-                if opening is None:
-                    break
-                macro = opening.group(1).split(":", 1)[0]
-                pos = opening.end()
-            else:
-                closing = JIRA_MACRO_CLOSE_RE[macro].search(content, pos)
-                if closing is None:
-                    break
-                macro = None
-                pos = closing.end()
+        cursor = start
+        while index < len(verbatim) and verbatim[index][0] < end:
+            first, last = verbatim[index]
+            if first > cursor:
+                spans.append((cursor - start, first - start))
+            cursor = max(cursor, last)
+            if last > end:  # the range goes on into the next line
+                break
+            index += 1
+        if cursor < end:
+            spans.append((cursor - start, end - start))
         yield number, content, newline, spans
 
 
