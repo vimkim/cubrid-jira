@@ -26,7 +26,7 @@ prints the exact requests it would send and sends nothing until you add
 | See your open tickets by status | `cubrid-jira-kanban` |
 | Create, comment, link, assign, update, or transition | `cubrid-jira create`, `comment`, `link`, `assign`, `update`, `transition` |
 | Move a sub-task to another parent | `cubrid-jira reparent CBRD-XXXXX --to CBRD-YYYYY` |
-| Find `{{code}}` markup that touches Korean text | `cubrid-jira lint CBRD-27984` or `cubrid-jira lint report.md` |
+| Find `{{code}}` markup that touches a letter or digit | `cubrid-jira lint CBRD-27984` or `cubrid-jira lint report.md` |
 
 Each command and flag is described in the [command reference](docs/commands.md).
 
@@ -124,10 +124,10 @@ cubrid-jira comment CBRD-XXXXX --body-file note.md --yes
   a sub-task's parent through REST returns success and changes nothing.
   `reparent` drives the web UI's Convert wizard instead.
 - **Markdown survives the trip.** pandoc converts each body to Jira wiki
-  markup. The CLI also fixes spacing where Korean text touches inline markup
-  and refuses a body whose `{{ }}` markers still touch it,
-  keeps code that contains `{code}` intact, and rejects Markdown tables whose
-  columns could shift.
+  markup. The CLI also fixes spacing where a letter or digit touches `{{ }}`
+  (or Hangul touches bold or emphasis) and refuses a body whose `{{ }}` markers
+  still touch one, keeps code that contains `{code}` intact, and rejects
+  Markdown tables whose columns could shift.
 
 Exit codes and JSON shapes are listed in
 [Output and exit codes](docs/output-and-exit-codes.md).

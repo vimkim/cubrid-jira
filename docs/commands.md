@@ -111,8 +111,9 @@ the username), `created`, and `body`.
 
 ### `lint`
 
-`lint` finds `{{` and `}}` markers that touch Korean text. JIRA Server renders
-`{{name}}의` as literal braces instead of monospace. `lint` never writes.
+`lint` finds `{{` and `}}` markers that touch a letter or digit. JIRA Server
+renders `{{name}}의`, `{{name}}s`, and `b{{name}}` as literal braces instead of
+monospace. `lint` never writes.
 
 ```text
 cubrid-jira lint FILE|-  [--from markdown|jira] [--fix] [--output json]
@@ -120,9 +121,9 @@ cubrid-jira lint KEY|URL [--server URL] [--output json]
 ```
 
 A file target (`-` reads stdin) goes through the same conversion as a write:
-pandoc for Markdown, then the Korean spacing fix. `lint` reports the markers
-that remain after that conversion, which means a gap in the spacing fix. Every
-write runs the same check and refuses to send such a body; `lint` shows it
+pandoc for Markdown, then the inline-markup spacing fix. `lint` reports the
+markers that remain after that conversion, which means a gap in the spacing fix.
+Every write runs the same check and refuses to send such a body; `lint` shows it
 before you try. `--fix` prints the converted Jira body on stdout and moves the
 report to stderr.
 
@@ -364,13 +365,16 @@ Pass `--from jira` when the file already contains Jira wiki markup.
 
 The conversion handles these cases:
 
-- **Korean spacing.** JIRA Server fails to parse an inline marker that is
-  followed directly by Hangul, such as `{{name}}의`. Both input formats get a
-  spacing fix for this, including a marker nested in bold or emphasis, such as
-  `*{{name}}의 값*`. After the fix, a separate check looks for any `{{` or `}}`
-  that still touches Hangul. If it finds one, the write stops before sending,
-  dry runs included, and stderr names the line and column. Run
-  [`lint`](#lint) to check a body first.
+- **Inline markup spacing.** JIRA Server shows `{{ }}` as literal braces when
+  a letter or digit, in any script, touches it, such as `{{name}}의`,
+  `{{name}}s`, or `b{{name}}`. Both input formats get a spacing fix that adds a
+  space there, including for a `{{ }}` nested in bold or emphasis, such as
+  `*{{name}}의 값*`. Bold and emphasis markers get a space only from Hangul,
+  because `foo_bar_baz` and `a*b*c` are identifiers that JIRA leaves literal.
+  After the fix, a separate check looks for any `{{` or `}}` that still touches
+  a letter or digit. If it finds one, the write stops before sending, dry runs
+  included, and stderr names the line and column. Run [`lint`](#lint) to check
+  a body first.
 - **Code fence labels.** The CLI maps fence labels to the formatter names that
   `jira.cubrid.org` supports. `text`, `plaintext`, and any unknown label become
   `none`, so the issue does not show an unsupported-formatter error.

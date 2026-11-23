@@ -1,4 +1,4 @@
-"""`cubrid-jira lint`: find `{{`/`}}` markers that touch Hangul.
+"""`cubrid-jira lint`: find `{{`/`}}` markers that touch a letter or digit.
 
 File targets are checked after the same conversion a write would apply;
 issue targets are checked as stored on the server.

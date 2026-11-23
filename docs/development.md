@@ -39,7 +39,7 @@ render. Each case's converted output is looked up in
 that `jira.cubrid.org` rendered for it. The comparison ignores whitespace, so
 spaces the fixer inserts are fine but lost or changed markup is not.
 
-The tests also check that `find_korean_markup_contacts` flags exactly the
+The tests also check that `find_markup_contacts` flags exactly the
 markup that Jira renders with a literal `{{` or `}}`, and that identifiers such
 as `foo_bar_baz` pass through unchanged. These tests read the snapshot, so they
 need no network.

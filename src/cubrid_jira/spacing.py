@@ -1,8 +1,12 @@
-"""Korean-aware spacing for Jira wiki bodies.
+"""Spacing for inline markup in Jira wiki bodies.
 
-Jira Server can fail to recognize inline wiki markup when the marker touches
-Korean text directly, for example ``{{name}}의``. Raw Jira write bodies and
-Markdown-converted write bodies both pass through this helper before upload.
+Jira Server's renderer shows ``{{ }}`` literally when the character just
+outside it is a letter or digit in any script, for example ``{{name}}의`` or
+``{{name}}s``. Bold and emphasis markers fail the same way next to Hangul only:
+``foo_bar_baz`` and ``a*b*c`` are identifiers that Jira also leaves literal,
+so those two marker kinds are not spaced from Latin letters or digits. Raw
+Jira write bodies and Markdown-converted write bodies both pass through this
+helper before upload.
 """
 
 from __future__ import annotations
@@ -11,7 +15,7 @@ import re
 from collections.abc import Iterator
 from dataclasses import dataclass
 
-KOREAN = r"[\u1100-\u11FF\u3130-\u318F\uAC00-\uD7AF]"
+HANGUL = r"[\u1100-\u11FF\u3130-\u318F\uAC00-\uD7AF]"
 
 INLINE_JIRA_RE = re.compile(
     r"""
@@ -25,8 +29,8 @@ JIRA_BLOCK_RE = re.compile(r"^\s*\{(code(?::[^}]*)?|noformat)\}\s*$")
 FENCE_RE = re.compile(r"^\s*(```|~~~)")
 
 
-def _is_korean_char(ch: str) -> bool:
-    return re.match(KOREAN, ch) is not None
+def is_hangul_char(ch: str) -> bool:
+    return re.match(HANGUL, ch) is not None
 
 
 def _fix_inline_spacing(text: str) -> str:
@@ -44,14 +48,15 @@ def _fix_inline_spacing(text: str) -> str:
 
         prev_char = text[start - 1] if start > 0 else ""
         next_char = text[end] if end < len(text) else ""
+        # {{ }} breaks next to any letter or digit; bold/emphasis only next to Hangul.
+        touches = str.isalnum if span.startswith("{{") else is_hangul_char
 
-        if prev_char and _is_korean_char(prev_char):
-            if not result[-1].endswith(" "):
-                result.append(" ")
+        if touches(prev_char) and not result[-1].endswith(" "):
+            result.append(" ")
 
         result.append(span)
 
-        if next_char and _is_korean_char(next_char):
+        if touches(next_char):
             result.append(" ")
 
         last = end
@@ -96,8 +101,11 @@ def _lines_outside_blocks(text: str) -> Iterator[tuple[int, str, str, bool]]:
         yield number, content, newline, jira_block is None and not fence_marker
 
 
-def normalize_korean_jira_spacing(text: str) -> str:
-    """Insert spaces between Korean text and Jira inline markup.
+def normalize_jira_inline_spacing(text: str) -> str:
+    """Insert spaces between Jira inline markup and the text it touches.
+
+    ``{{ }}`` gets a space from any adjacent letter or digit; bold and emphasis
+    only from adjacent Hangul.
 
     Code/noformat blocks and Markdown-style fenced blocks are left unchanged.
     """
@@ -113,12 +121,13 @@ def normalize_korean_jira_spacing(text: str) -> str:
 # Deliberately independent of INLINE_JIRA_RE: it does not track span structure,
 # so it still catches a case the normalizer misses (CBRD-28073 comment 4778780,
 # where a {{code}} span nested in *bold* kept "}}" against Hangul).
-CONTACT_RE = re.compile(rf"\}}\}}(?={KOREAN})|(?<={KOREAN})\{{\{{")
+# [^\W_] is a letter or digit in any script, as str.isalnum() sees it.
+CONTACT_RE = re.compile(r"\}\}(?=[^\W_])|(?<=[^\W_])\{\{")
 
 
 @dataclass(frozen=True)
 class MarkupContact:
-    """A ``{{``/``}}`` marker touching Hangul, which Jira renders literally."""
+    """A ``{{``/``}}`` marker touching a letter or digit, which Jira renders literally."""
 
     line: int
     column: int
@@ -126,8 +135,8 @@ class MarkupContact:
     text: str
 
 
-def find_korean_markup_contacts(text: str) -> list[MarkupContact]:
-    """Return every ``}}`` followed by Hangul and every ``{{`` after Hangul.
+def find_markup_contacts(text: str) -> list[MarkupContact]:
+    """Return every ``}}`` followed by a letter or digit and every ``{{`` after one.
 
     Lines and columns are 1-based; code/noformat and fenced blocks are skipped.
     """
@@ -142,8 +151,8 @@ def find_korean_markup_contacts(text: str) -> list[MarkupContact]:
     return contacts
 
 
-class KoreanMarkupError(ValueError):
-    """A Jira body still has ``{{``/``}}`` touching Hangul."""
+class InlineMarkupError(ValueError):
+    """A Jira body still has ``{{``/``}}`` touching a letter or digit."""
 
     def __init__(self, contacts: list[MarkupContact]):
         self.contacts = contacts
@@ -157,8 +166,8 @@ def format_contacts(contacts: list[MarkupContact], indent: str = "  ") -> str:
     return "\n".join(lines)
 
 
-def check_korean_markup(text: str) -> None:
-    """Raise :class:`KoreanMarkupError` if any marker touches Hangul."""
-    contacts = find_korean_markup_contacts(text)
+def check_inline_markup(text: str) -> None:
+    """Raise :class:`InlineMarkupError` if any marker touches a letter or digit."""
+    contacts = find_markup_contacts(text)
     if contacts:
-        raise KoreanMarkupError(contacts)
+        raise InlineMarkupError(contacts)

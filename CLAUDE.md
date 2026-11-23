@@ -4,7 +4,7 @@
 canonical binary    cubrid-jira <subcommand> [args…]
 read                search (one issue by key, cache-first) | jql (list by query, live)
                     | attachment (list/download issue attachments, live)
-                    | lint (FILE: {{ }} touching Hangul after write conversion;
+                    | lint (FILE: {{ }} touching a letter or digit after write conversion;
                       KEY: description + comments as stored, live)
 field-write         create | comment | comment-list | comment-update | comment-delete | link | transition | assign | update
 structural-write    convert-to-issue | convert-to-subtask | reparent
@@ -48,11 +48,14 @@ reparent           <KEY> --to <PARENT>            move a Sub-task between parent
 Full background, traps, and curl-only smoke test:
 `docs/reparent-subtasks-via-convert-wizard.md`.
 
-## Korean markup guard
+## Inline markup guard
 
-JIRA Server renders `{{x}}의` literally, so writes run
-`spacing.normalize_korean_jira_spacing` (auto-fix), then
-`spacing.check_korean_markup` (refuse, exit 1). The check uses its own regex
+JIRA Server renders `{{x}}` literally when the character just outside it is a
+letter or digit in any script (`{{x}}의`, `b{{x}}`, `{{x}}7`). Bold and
+emphasis fail the same way only next to Hangul; `foo_bar_baz` and `a*b*c` are
+identifiers that Jira leaves literal, so the fixer does not touch them.
+Writes run `spacing.normalize_jira_inline_spacing` (auto-fix), then
+`spacing.check_inline_markup` (refuse, exit 1). The check uses its own regex
 (`CONTACT_RE`), deliberately independent of the fixer's span matching, so a
 fixer gap stops the write instead of shipping broken markup. `lint` exposes
 the same detector for files and stored issue bodies. When the check fires on

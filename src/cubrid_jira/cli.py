@@ -61,11 +61,11 @@ from cubrid_jira.markdown import (
 from cubrid_jira.session import SessionClient, WizardHTTPError, WizardRedirectError
 from cubrid_jira.server import DEFAULT_SERVER, select_server
 from cubrid_jira.spacing import (
-    KoreanMarkupError,
-    check_korean_markup,
-    find_korean_markup_contacts,
+    InlineMarkupError,
+    check_inline_markup,
+    find_markup_contacts,
     format_contacts,
-    normalize_korean_jira_spacing,
+    normalize_jira_inline_spacing,
 )
 from cubrid_jira.walk import fetch_recursive, save_issue
 from cubrid_jira.wizard import (
@@ -334,22 +334,22 @@ def _make_session(args) -> SessionClient:
 
 
 def _convert_jira_body(text: str, input_format: str) -> str:
-    """Convert a body to Jira wiki markup with the Korean spacing fix."""
+    """Convert a body to Jira wiki markup with the inline-markup spacing fix."""
     if input_format == "jira":
-        return normalize_korean_jira_spacing(text)
+        return normalize_jira_inline_spacing(text)
     if input_format == "markdown":
         return markdown_to_jira_body(text)
     raise ValueError(f"unknown body input format: {input_format!r}")
 
 
 def _render_jira_body(text: str, input_format: str) -> str:
-    """Convert a write body, then refuse it if ``{{``/``}}`` still touch Hangul.
+    """Convert a write body, then refuse it if a ``{{ }}`` still touches a letter or digit.
 
     The check is independent of the spacing fix, so a gap in the fix stops the
     write instead of uploading markup that Jira renders literally.
     """
     body = _convert_jira_body(text, input_format)
-    check_korean_markup(body)
+    check_inline_markup(body)
     return body
 
 
@@ -369,9 +369,9 @@ def _read_and_render_jira_body(
     except MarkdownConversionError as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
-    except KoreanMarkupError as e:
+    except InlineMarkupError as e:
         print(
-            "Error: Jira markup still touches Korean text after the spacing "
+            "Error: Jira markup still touches a letter or digit after the spacing "
             f"fix:\n{e}\nRefusing to send. Add a space next to the marker in "
             f"{body_file}, and report the case as a spacing-fix bug.",
             file=sys.stderr,
@@ -935,7 +935,7 @@ def _lint_file(args) -> None:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
 
-    contacts = find_korean_markup_contacts(body)
+    contacts = find_markup_contacts(body)
     if _output_format(args) == "json":
         out: dict = {
             "target": target,
@@ -984,12 +984,12 @@ def _lint_issue(args) -> None:
             file=sys.stderr,
         )
 
-    description_contacts = find_korean_markup_contacts(
+    description_contacts = find_markup_contacts(
         fields.get("description") or ""
     )
     broken_comments = []
     for c in comments:
-        contacts = find_korean_markup_contacts(c.get("body") or "")
+        contacts = find_markup_contacts(c.get("body") or "")
         if contacts:
             broken_comments.append((c, contacts))
 
@@ -1864,7 +1864,7 @@ def _add_body_input_flag(p: argparse.ArgumentParser, target: str) -> None:
         default="markdown",
         help=(
             f"Input format for {target}: markdown converts to Jira wiki markup "
-            "(default); jira sends raw Jira wiki markup with Korean spacing fixes."
+            "(default); jira sends raw Jira wiki markup with inline-markup spacing fixes."
         ),
     )
 
@@ -2020,7 +2020,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     p_lint = sub.add_parser(
         "lint",
-        help="Find {{ }} markers that touch Korean text, in a local body "
+        help="Find {{ }} markers that touch a letter or digit, in a local body "
              "file or in an issue's description and comments (read-only).",
     )
     p_lint.add_argument(

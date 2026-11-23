@@ -18,7 +18,7 @@ import markup_cases as mc
 import render_snapshot as rs
 from conftest import PANDOC_HAS_JIRA
 from cubrid_jira.cli import _convert_jira_body
-from cubrid_jira.spacing import find_korean_markup_contacts
+from cubrid_jira.spacing import find_markup_contacts
 
 requires_pandoc = pytest.mark.skipif(
     not PANDOC_HAS_JIRA, reason="pandoc lacks Jira formats"
@@ -65,7 +65,7 @@ def test_detector_agrees_with_renderer(case, label, snapshot):
     """The detector must flag exactly the markup that Jira renders with ``{{``/``}}``."""
     markup = mc.markup(case, label)
     html = _html_for(snapshot, markup)
-    flagged = bool(find_korean_markup_contacts(markup))
+    flagged = bool(find_markup_contacts(markup))
     literal = mc.renders_literal_braces(html)
     assert flagged == literal, (
         f"\n  markup:   {markup!r}"

@@ -18,14 +18,15 @@ import subprocess
 import sys
 
 from cubrid_jira.server import DEFAULT_SERVER, normalize_server
-from cubrid_jira.spacing import normalize_korean_jira_spacing
+from cubrid_jira.spacing import is_hangul_char, normalize_jira_inline_spacing
 
-KOREAN = r"[\u1100-\u11FF\u3130-\u318F\uAC00-\uD7AF]"
+# The code alternative also matches one character; its lazy "??" keeps the
+# first closing backtick for `a` and `b` instead of running on to the last.
 MARKDOWN_INLINE_RE = re.compile(
     r"""
     (?<!\*)\*\*([^\n]*?[^\s*])\*\*(?!\*)      |   # **bold**
     (?<!\*)\*([^\s*\n][^\n]*?[^\s*])\*(?!\*) |   # *italic*
-    `([^\s`\n][^\n]*?[^\s`])`                    # `code`
+    `([^\s`\n](?:[^\n]*?[^\s`])??)`              # `code`
     """,
     re.VERBOSE,
 )
@@ -143,10 +144,6 @@ def jira_to_markdown(text: str) -> str:
     return result.stdout.replace(escaped_pipe_token, r"\|").strip("\n")
 
 
-def _is_korean_char(ch: str) -> bool:
-    return re.match(KOREAN, ch) is not None
-
-
 def _normalize_markdown_span(span: str) -> str:
     if span.startswith("**") and span.endswith("**"):
         return f"**{span[2:-2].strip()}**"
@@ -174,14 +171,15 @@ def _fix_markdown_inline_spacing(text: str) -> str:
 
         prev_char = text[start - 1] if start > 0 else ""
         next_char = text[end] if end < len(text) else ""
+        # Code breaks next to any letter or digit; bold/italic only next to Hangul.
+        touches = str.isalnum if span.startswith("`") else is_hangul_char
 
-        if prev_char and _is_korean_char(prev_char):
-            if not result[-1].endswith(" "):
-                result.append(" ")
+        if touches(prev_char) and not result[-1].endswith(" "):
+            result.append(" ")
 
         result.append(span)
 
-        if next_char and _is_korean_char(next_char):
+        if touches(next_char):
             result.append(" ")
 
         last = end
@@ -190,8 +188,11 @@ def _fix_markdown_inline_spacing(text: str) -> str:
     return "".join(result)
 
 
-def normalize_korean_markdown_spacing(text: str) -> str:
-    """Insert spaces between Korean text and Markdown inline spans.
+def normalize_markdown_inline_spacing(text: str) -> str:
+    """Insert spaces between Markdown inline spans and the text they touch.
+
+    Code spans get a space from any adjacent letter or digit; bold and italic
+    only from adjacent Hangul.
 
     Fenced code blocks are left unchanged.
     """
@@ -547,12 +548,12 @@ def markdown_to_jira_body(md_text: str) -> str:
     protected_markdown, escaped_pipe_token = _protect_escaped_pipes(
         protected_markdown
     )
-    spaced_markdown = normalize_korean_markdown_spacing(protected_markdown)
+    spaced_markdown = normalize_markdown_inline_spacing(protected_markdown)
     jira_text = md_to_jira(sanitize_markdown(spaced_markdown))
     jira_text = jira_text.replace(escaped_pipe_token, "&#124;")
     jira_text = normalize_jira_code_languages(jira_text)
     jira_text = _normalize_fenced_code_placeholders(jira_text, code_replacements)
-    jira_text = normalize_korean_jira_spacing(jira_text)
+    jira_text = normalize_jira_inline_spacing(jira_text)
     return _restore_fenced_code_contents(jira_text, code_replacements)
 
 
