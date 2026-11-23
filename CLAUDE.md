@@ -62,6 +62,14 @@ the same detector for files and stored issue bodies. When the check fires on
 real input, fix the normalizer and add the case to `tests/test_spacing.py`;
 do not loosen the check.
 
+The fixer and the detector share two helpers: `spacing.is_word_char` (a letter
+or an Nd digit, not `str.isalnum`) and `spacing._prose_spans` (prose outside
+`{code}`/`{noformat}`, even when a macro opens or closes mid-line). Code spans
+are masked before `*bold*`/`_emphasis_` are matched. `tests/test_render_oracle.py`
+checks all of this against Jira's real renderer; text inside `<tt>`/`<pre>` is
+compared exactly. Add a case to `HOSTILE` in `tests/markup_cases.py` for any
+new way a spacer can touch code text.
+
 ## Create priority
 
 CBRD's create screen rejects `priority` (400 "not on the appropriate screen"),

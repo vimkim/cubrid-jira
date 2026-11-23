@@ -368,7 +368,9 @@ The conversion handles these cases:
 - **Inline markup spacing.** JIRA Server shows `{{ }}` as literal braces when
   a letter or digit, in any script, touches it, such as `{{name}}의`,
   `{{name}}s`, or `b{{name}}`. A superscript or circled number such as
-  `{{n}}²` is neither, renders fine, and gets no space. The spacing fix runs on the Jira markup, so
+  `{{n}}²` is neither, renders fine, and gets no space. A brace run such as
+  `{{x}}}값` also renders fine: JIRA closes the span at the first `}}`. The
+  spacing fix runs on the Jira markup, so
   both input formats get the same one. It adds a space there, including for a
   `{{ }}` nested in bold or emphasis, such as `*{{name}}의 값*`. Bold and
   emphasis markers get a space only from Hangul, because `foo_bar_baz` and

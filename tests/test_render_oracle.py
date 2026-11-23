@@ -25,37 +25,13 @@ requires_pandoc = pytest.mark.skipif(
 )
 
 
-# Oracle failures that a later commit fixes: (test name, param id) -> reason.
-# The xfail is strict, so the commit that fixes one must delete its entry.
-KNOWN_BROKEN: dict[tuple[str, str], str] = {
-    ("detector", "jira:hostile:brace-after-closing-braces[converted]"):
-        "finding 8: detector flags a }} that follows a }",
-    ("detector", "jira:hostile:brace-after-closing-braces[raw]"):
-        "finding 8: detector flags a }} that follows a }",
-    ("detector", "jira:hostile:brace-run-after-letter[converted]"):
-        "finding 8: detector flags a {{ that precedes a {",
-    ("detector", "jira:hostile:brace-run-after-letter[raw]"):
-        "finding 8: detector flags a {{ that precedes a {",
-}
+def _marks(case: mc.Case):
+    return [requires_pandoc] if mc.needs_pandoc(case) else []
 
 
-def _marks(case: mc.Case, test: str, param_id: str):
-    marks = [requires_pandoc] if mc.needs_pandoc(case) else []
-    reason = KNOWN_BROKEN.get((test, param_id))
-    if reason:
-        marks.append(pytest.mark.xfail(strict=True, reason=reason))
-    return marks
-
-
-CASES = [
-    pytest.param(case, id=case.id, marks=_marks(case, "converted", case.id))
-    for case in mc.all_cases()
-]
+CASES = [pytest.param(case, id=case.id, marks=_marks(case)) for case in mc.all_cases()]
 MARKUPS = [
-    pytest.param(
-        case, label, id=f"{case.id}[{label}]",
-        marks=_marks(case, "detector", f"{case.id}[{label}]"),
-    )
+    pytest.param(case, label, id=f"{case.id}[{label}]", marks=_marks(case))
     for case in mc.all_cases()
     for label in mc.labels(case)
 ]

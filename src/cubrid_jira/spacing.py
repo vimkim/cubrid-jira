@@ -178,7 +178,9 @@ def normalize_jira_inline_spacing(text: str) -> str:
 # comment 4778780, where a {{code}} span nested in *bold* kept "}}" against
 # Hangul). [^\W_] is a broad net, a letter or digit as str.isalnum() sees it;
 # find_markup_contacts keeps the matches whose neighbor is_word_char.
-CONTACT_RE = re.compile(r"\}\}(?=[^\W_])|(?<=[^\W_])\{\{")
+# Jira closes a span at the first "}}" and opens it at the last "{{", so a "}}"
+# that follows a "}" and a "{{" that precedes a "{" are literal braces.
+CONTACT_RE = re.compile(r"(?<!\})\}\}(?=[^\W_])|(?<=[^\W_])\{\{(?!\{)")
 
 
 @dataclass(frozen=True)

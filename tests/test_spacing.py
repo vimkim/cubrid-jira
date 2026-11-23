@@ -295,3 +295,25 @@ def test_a_letter_or_decimal_digit_of_any_kind_needs_a_space(text, expected):
     assert find_markup_contacts(text) != []
     assert normalize_jira_inline_spacing(text) == expected
     assert find_markup_contacts(expected) == []
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["{{x}}}값", "{{x}}}s", "{{x}}}7", "a{{{x}} b", "값{{{x}} b", "a {{x}}}b {{y}}"],
+)
+def test_a_brace_run_next_to_code_is_a_literal_brace_not_a_contact(text):
+    """Jira closes a span at the first ``}}`` and opens it at the last ``{{``."""
+    assert find_markup_contacts(text) == []
+    assert normalize_jira_inline_spacing(text) == text
+
+
+def test_a_real_contact_is_still_flagged_next_to_a_brace_run():
+    text = "{{x}}}값 and {{y}}값 and a{{{z}} and b{{w}}"
+
+    assert [(c.column, c.marker) for c in find_markup_contacts(text)] == [
+        (16, "}}"),
+        (37, "{{"),
+    ]
+    assert normalize_jira_inline_spacing(text) == (
+        "{{x}}}값 and {{y}} 값 and a{{{z}} and b {{w}}"
+    )
