@@ -236,6 +236,120 @@ LITERALS: tuple[LiteralCase, ...] = (
     ),
 )
 
+_CODE_PANEL = (
+    '<div class="code panel" style="border-width: 1px;">'
+    '<div class="codeContent panelContent">\n'
+    '<pre class="code-java">{}</pre>\n</div></div>'
+)
+_NOFORMAT_PANEL = (
+    '<div class="preformatted panel" style="border-width: 1px;">'
+    '<div class="preformattedContent panelContent">\n<pre>{}</pre>\n</div></div>'
+)
+
+# Code text that is hostile to the inline fixers: underscores, stars, backticks
+# and braces inside code, prose with identifiers before it, and macros that
+# share a line with content. The oracle compares text inside code exactly, so a
+# space inserted into the code fails. Raw Jira braces at the inner edge of
+# code are not here: that is a known gap (see the follow-up issues).
+HOSTILE: tuple[LiteralCase, ...] = (
+    LiteralCase(
+        "jira:hostile:underscore-code-after-snake-prose",
+        "my_table의 {{col_이름}} 컬럼",
+        "<p>my_table의 <tt>col_이름</tt> 컬럼</p>",
+    ),
+    LiteralCase(
+        "markdown:hostile:underscore-code-after-snake-prose",
+        "my_table의 `col_이름` 컬럼",
+        "<p>my_table의 <tt>col_이름</tt> 컬럼</p>",
+        "markdown",
+    ),
+    LiteralCase(
+        "jira:hostile:star-code-after-2*3",
+        "2*3 {{a*b}} 끝",
+        "<p>2*3 <tt>a*b</tt> 끝</p>",
+    ),
+    LiteralCase(
+        "jira:hostile:star-then-hangul-in-code-after-2*3",
+        "2*3 {{x*값}} 끝",
+        "<p>2*3 <tt>x*값</tt> 끝</p>",
+    ),
+    LiteralCase(
+        "markdown:hostile:star-code-after-2*3",
+        "2*3 `a*b` 끝",
+        "<p>2*3 <tt>a*b</tt> 끝</p>",
+        "markdown",
+    ),
+    LiteralCase(
+        "markdown:hostile:star-then-hangul-in-code-after-2*3",
+        "2*3 `x*값` 끝",
+        "<p>2*3 <tt>x*값</tt> 끝</p>",
+        "markdown",
+    ),
+    LiteralCase(
+        "markdown:hostile:double-backtick-code-with-backtick",
+        "``a`b``값",
+        "<p><tt>a`b</tt> 값</p>",
+        "markdown",
+    ),
+    LiteralCase(
+        "markdown:hostile:escaped-backticks",
+        "quote with \\`a\\`b here",
+        "<p>quote with `a`b here</p>",
+        "markdown",
+    ),
+    LiteralCase(
+        "markdown:hostile:braces-inside-code",
+        "앞 `m{k}x` 뒤",
+        "<p>앞 <tt>m{k}x</tt> 뒤</p>",
+        "markdown",
+    ),
+    LiteralCase(
+        "jira:hostile:escaped-braces-inside-code",
+        "앞 {{m\\{k\\}x}} 뒤",
+        "<p>앞 <tt>m{k}x</tt> 뒤</p>",
+    ),
+    LiteralCase(
+        "jira:hostile:code-macro-on-one-line",
+        "{code}print(a{{x}}b){code}",
+        _CODE_PANEL.format("print(a{{x}}b)"),
+    ),
+    LiteralCase(
+        "jira:hostile:noformat-macro-on-one-line",
+        "{noformat}a{{b}}c{noformat}",
+        _NOFORMAT_PANEL.format("a{{b}}c"),
+    ),
+    LiteralCase(
+        "jira:hostile:prose-around-code-macro",
+        "앞{{a}}값 {code}z{code} 뒤{{b}}값",
+        "<p>앞<tt>a</tt>값</p>" + _CODE_PANEL.format("z") + "<p>뒤<tt>b</tt>값</p>",
+    ),
+    LiteralCase(
+        "jira:hostile:superscript-after-code",
+        "{{x}}²",
+        "<p><tt>x</tt>²</p>",
+    ),
+    LiteralCase(
+        "jira:hostile:circled-digit-after-code",
+        "{{x}}①",
+        "<p><tt>x</tt>①</p>",
+    ),
+    LiteralCase(
+        "jira:hostile:roman-numeral-after-code",
+        "{{x}}Ⅻ",
+        "<p><tt>x</tt>Ⅻ</p>",
+    ),
+    LiteralCase(
+        "jira:hostile:brace-after-closing-braces",
+        "{{x}}}값",
+        "<p><tt>x</tt>}값</p>",
+    ),
+    LiteralCase(
+        "jira:hostile:brace-run-after-letter",
+        "a{{{x}} b",
+        "<p>a{<tt>x</tt> b</p>",
+    ),
+)
+
 # Identifier-like text. Never markup, so a write must not touch it.
 IDENTIFIERS: tuple[str, ...] = (
     "foo_bar_baz",
@@ -255,6 +369,7 @@ def all_cases() -> tuple[Case, ...]:
         *_specs("jira"),
         *_specs("markdown"),
         *LITERALS,
+        *HOSTILE,
     )
 
 
@@ -297,21 +412,37 @@ def needed_markups(*, pandoc: bool = PANDOC_HAS_JIRA) -> list[str]:
 
 _OUTER_P = re.compile(r"\A<p>(.*)</p>\Z", re.DOTALL)
 _WHITESPACE = re.compile(r"\s+|&nbsp;")
+_NUMERIC_REF = re.compile(r"&#(\d+);")
+# Text Jira shows as code: <tt> for {{ }}, <pre> for {code} and {noformat}.
+_CODE_TEXT = re.compile(r"(<tt>.*?</tt>|<pre\b[^>]*>.*?</pre>)", re.DOTALL)
+_PRE = re.compile(r"<pre\b[^>]*>.*?</pre>", re.DOTALL)
 
 
 def squash_html(html: str) -> str:
-    """Drop one outer ``<p>..</p>``, then all whitespace (incl. no-break).
+    """Normalize rendered HTML for comparison.
 
-    Spaces the fixer inserts must not matter; markup structure and visible
-    text must.
+    Drops one outer ``<p>..</p>``, then all whitespace (incl. no-break)
+    *outside* code, so spaces the fixer inserts next to a span do not matter.
+    Text inside ``<tt>`` and ``<pre>`` is compared exactly: a space inserted
+    into code changes what the reader sees. Jira writes an escaped ``*`` as
+    ``&#42;``; numeric references are decoded so both spellings compare equal.
     """
-    html = html.strip()
+    html = _NUMERIC_REF.sub(lambda m: chr(int(m.group(1))), html.strip())
     match = _OUTER_P.match(html)
     if match and "<p>" not in match.group(1):
         html = match.group(1)
-    return _WHITESPACE.sub("", html)
+    parts = _CODE_TEXT.split(html)
+    return "".join(
+        part if index % 2 else _WHITESPACE.sub("", part)
+        for index, part in enumerate(parts)
+    )
 
 
 def renders_literal_braces(html: str) -> bool:
-    """True when Jira left ``{{`` or ``}}`` in the visible output."""
-    return "{{" in html or "}}" in html
+    """True when Jira left ``{{`` or ``}}`` in the visible markup.
+
+    ``{code}``/``{noformat}`` panels show their text verbatim, braces
+    included, so ``<pre>`` content does not count.
+    """
+    prose = _PRE.sub("", html)
+    return "{{" in prose or "}}" in prose

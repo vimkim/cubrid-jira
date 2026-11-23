@@ -34,10 +34,15 @@ renderer instead of hand-guessed expectations. `tests/markup_cases.py`
 generates a few hundred small cases from a spec (a chain of inline markers,
 such as bold around code, plus the character that touches each marker). The
 spec alone yields the Markdown source, the Jira source, and the HTML Jira must
-render. Each case's converted output is looked up in
+render. A second group of hand-written cases (`HOSTILE`) uses code text that
+fights the fixers: `col_이름` after `my_table의`, `a*b`, backticks and braces
+inside code, a `{code}` macro on the same line as content. Each case's
+converted output is looked up in
 `tests/data/jira_render_snapshot.json`, a recorded map from markup to the HTML
-that `jira.cubrid.org` rendered for it. The comparison ignores whitespace, so
-spaces the fixer inserts are fine but lost or changed markup is not.
+that `jira.cubrid.org` rendered for it. The comparison ignores whitespace
+outside code, so spaces the fixer inserts next to a span are fine. Text inside
+`<tt>` and `<pre>` must match exactly, so a space inserted into code fails.
+Lost or changed markup fails too.
 
 The tests also check that `find_markup_contacts` flags exactly the
 markup that Jira renders with a literal `{{` or `}}`, and that identifiers such

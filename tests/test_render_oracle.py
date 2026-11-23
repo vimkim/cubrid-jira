@@ -25,13 +25,61 @@ requires_pandoc = pytest.mark.skipif(
 )
 
 
-def _marks(case: mc.Case):
-    return [requires_pandoc] if mc.needs_pandoc(case) else []
+# Oracle failures that a later commit fixes: (test name, param id) -> reason.
+# The xfail is strict, so the commit that fixes one must delete its entry.
+KNOWN_BROKEN: dict[tuple[str, str], str] = {
+    ("converted", "markdown:hostile:double-backtick-code-with-backtick"):
+        "finding 1: Markdown-stage spacing puts a space inside the code span",
+    ("converted", "jira:hostile:code-macro-on-one-line"):
+        "finding 2: one-line {code} content is spaced",
+    ("converted", "jira:hostile:noformat-macro-on-one-line"):
+        "finding 2: one-line {noformat} content is spaced",
+    ("detector", "jira:hostile:code-macro-on-one-line[raw]"):
+        "finding 2: detector reads one-line {code} content as prose",
+    ("detector", "jira:hostile:noformat-macro-on-one-line[raw]"):
+        "finding 2: detector reads one-line {noformat} content as prose",
+    ("converted", "jira:hostile:underscore-code-after-snake-prose"):
+        "finding 3: a false _ span pairs across the code boundary",
+    ("converted", "markdown:hostile:underscore-code-after-snake-prose"):
+        "finding 3: a false _ span pairs across the code boundary",
+    ("converted", "jira:hostile:star-then-hangul-in-code-after-2*3"):
+        "finding 3: a false * span pairs across the code boundary",
+    ("converted", "markdown:hostile:star-then-hangul-in-code-after-2*3"):
+        "finding 3: a false * span pairs across the code boundary",
+    ("detector", "jira:hostile:superscript-after-code[raw]"):
+        "finding 6: detector counts a No numeral as a letter or digit",
+    ("detector", "jira:hostile:circled-digit-after-code[raw]"):
+        "finding 6: detector counts a No numeral as a letter or digit",
+    ("detector", "jira:hostile:roman-numeral-after-code[raw]"):
+        "finding 6: detector counts an Nl numeral as a letter or digit",
+    ("detector", "jira:hostile:brace-after-closing-braces[converted]"):
+        "finding 8: detector flags a }} that follows a }",
+    ("detector", "jira:hostile:brace-after-closing-braces[raw]"):
+        "finding 8: detector flags a }} that follows a }",
+    ("detector", "jira:hostile:brace-run-after-letter[converted]"):
+        "finding 8: detector flags a {{ that precedes a {",
+    ("detector", "jira:hostile:brace-run-after-letter[raw]"):
+        "finding 8: detector flags a {{ that precedes a {",
+}
 
 
-CASES = [pytest.param(case, id=case.id, marks=_marks(case)) for case in mc.all_cases()]
+def _marks(case: mc.Case, test: str, param_id: str):
+    marks = [requires_pandoc] if mc.needs_pandoc(case) else []
+    reason = KNOWN_BROKEN.get((test, param_id))
+    if reason:
+        marks.append(pytest.mark.xfail(strict=True, reason=reason))
+    return marks
+
+
+CASES = [
+    pytest.param(case, id=case.id, marks=_marks(case, "converted", case.id))
+    for case in mc.all_cases()
+]
 MARKUPS = [
-    pytest.param(case, label, id=f"{case.id}[{label}]", marks=_marks(case))
+    pytest.param(
+        case, label, id=f"{case.id}[{label}]",
+        marks=_marks(case, "detector", f"{case.id}[{label}]"),
+    )
     for case in mc.all_cases()
     for label in mc.labels(case)
 ]
@@ -72,6 +120,22 @@ def test_detector_agrees_with_renderer(case, label, snapshot):
         f"\n  detector: {'flags it' if flagged else 'finds nothing'}"
         f"\n  rendered: {html!r}"
     )
+
+
+def test_comparison_sees_a_space_inside_code_but_not_outside_it():
+    """Guards the harness: it must be able to fail on the defects it hunts."""
+    squash = mc.squash_html
+    assert squash("<p><tt>col_ 이름</tt></p>") != squash("<p><tt>col_이름</tt></p>")
+    assert squash('<pre class="code-java">a {{x}} b</pre>') != squash(
+        '<pre class="code-java">a{{x}}b</pre>'
+    )
+    assert squash("<p>a <tt>x</tt> b</p>") == squash("<p>a<tt>x</tt>b</p>")
+    assert squash("<p><tt>x&#42;y</tt> 2&#42;3</p>") == squash("<p><tt>x*y</tt> 2*3</p>")
+
+
+def test_literal_braces_inside_a_code_panel_are_not_a_rendering_failure():
+    assert not mc.renders_literal_braces('<pre class="code-java">a{{x}}b</pre>')
+    assert mc.renders_literal_braces("<p>a{{x}}b</p>")
 
 
 @pytest.mark.parametrize("text", mc.IDENTIFIERS)
