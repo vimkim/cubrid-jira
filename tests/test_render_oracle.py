@@ -28,12 +28,6 @@ requires_pandoc = pytest.mark.skipif(
 # Oracle failures that a later commit fixes: (test name, param id) -> reason.
 # The xfail is strict, so the commit that fixes one must delete its entry.
 KNOWN_BROKEN: dict[tuple[str, str], str] = {
-    ("detector", "jira:hostile:superscript-after-code[raw]"):
-        "finding 6: detector counts a No numeral as a letter or digit",
-    ("detector", "jira:hostile:circled-digit-after-code[raw]"):
-        "finding 6: detector counts a No numeral as a letter or digit",
-    ("detector", "jira:hostile:roman-numeral-after-code[raw]"):
-        "finding 6: detector counts an Nl numeral as a letter or digit",
     ("detector", "jira:hostile:brace-after-closing-braces[converted]"):
         "finding 8: detector flags a }} that follows a }",
     ("detector", "jira:hostile:brace-after-closing-braces[raw]"):

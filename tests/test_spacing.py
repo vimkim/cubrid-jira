@@ -272,3 +272,26 @@ def test_marker_next_to_hangul_or_punctuation_is_spaced_from_hangul(text, expect
 )
 def test_a_marker_pair_jira_cannot_read_as_markup_is_left_alone(text):
     assert normalize_jira_inline_spacing(text) == text
+
+
+@pytest.mark.parametrize("text", ["{{x}}²", "{{x}}①", "{{x}}Ⅻ", "{{x}}½", "²{{x}}", "①{{x}}"])
+def test_a_numeral_that_is_not_a_letter_or_digit_needs_no_space(text):
+    """Jira breaks on letters and Nd digits only; No and Nl numerals render fine."""
+    assert normalize_jira_inline_spacing(text) == text
+    assert find_markup_contacts(text) == []
+
+
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        ("{{x}}٣", "{{x}} ٣"),    # Nd: Arabic-Indic digit
+        ("{{x}}１", "{{x}} １"),  # Nd: fullwidth digit
+        ("{{x}}ª", "{{x}} ª"),    # Lo
+        ("{{x}}ｰ", "{{x}} ｰ"),    # Lm
+        ("ǅ{{x}}", "ǅ {{x}}"),    # Lt
+    ],
+)
+def test_a_letter_or_decimal_digit_of_any_kind_needs_a_space(text, expected):
+    assert find_markup_contacts(text) != []
+    assert normalize_jira_inline_spacing(text) == expected
+    assert find_markup_contacts(expected) == []

@@ -14,6 +14,7 @@ Markdown-converted write bodies both pass through this helper before upload.
 from __future__ import annotations
 
 import re
+import unicodedata
 from collections.abc import Iterator
 from dataclasses import dataclass
 
@@ -45,8 +46,14 @@ def is_hangul_char(ch: str) -> bool:
 
 
 def is_word_char(ch: str) -> bool:
-    """True for a character Jira treats as part of a word."""
-    return ch.isalnum()
+    """True for a letter or a decimal digit in any script.
+
+    This is what makes Jira refuse markup next to a character: ``a``, ``값``,
+    ``ª``, ``٣``. A numeral such as ``²``, ``①`` or ``Ⅻ`` (category No or Nl)
+    is not one, although ``str.isalnum`` says so. The fixer and the detector
+    both ask this function.
+    """
+    return bool(ch) and (ch.isalpha() or unicodedata.category(ch) == "Nd")
 
 
 def _is_marker_boundary(ch: str) -> bool:
@@ -166,10 +173,11 @@ def normalize_jira_inline_spacing(text: str) -> str:
     return "".join(result)
 
 
-# Deliberately independent of the fixer's span matching: it does not track span structure,
-# so it still catches a case the normalizer misses (CBRD-28073 comment 4778780,
-# where a {{code}} span nested in *bold* kept "}}" against Hangul).
-# [^\W_] is a letter or digit in any script, as str.isalnum() sees it.
+# Deliberately independent of the fixer's span matching: it does not track span
+# structure, so it still catches a case the normalizer misses (CBRD-28073
+# comment 4778780, where a {{code}} span nested in *bold* kept "}}" against
+# Hangul). [^\W_] is a broad net, a letter or digit as str.isalnum() sees it;
+# find_markup_contacts keeps the matches whose neighbor is_word_char.
 CONTACT_RE = re.compile(r"\}\}(?=[^\W_])|(?<=[^\W_])\{\{")
 
 
@@ -192,9 +200,14 @@ def find_markup_contacts(text: str) -> list[MarkupContact]:
     for number, content, _, spans in _prose_spans(text):
         for start, end in spans:
             for match in CONTACT_RE.finditer(content, start, end):
-                contacts.append(
-                    MarkupContact(number, match.start() + 1, match.group(0), content)
+                marker = match.group(0)
+                neighbor = (
+                    content[match.end()] if marker == "}}" else content[match.start() - 1]
                 )
+                if is_word_char(neighbor):
+                    contacts.append(
+                        MarkupContact(number, match.start() + 1, marker, content)
+                    )
     return contacts
 
 

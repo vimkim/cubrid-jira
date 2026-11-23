@@ -339,6 +339,16 @@ HOSTILE: tuple[LiteralCase, ...] = (
         "<p><tt>x</tt>Ⅻ</p>",
     ),
     LiteralCase(
+        "jira:hostile:arabic-digit-after-code",
+        "{{x}}٣",
+        "<p><tt>x</tt>٣</p>",
+    ),
+    LiteralCase(
+        "jira:hostile:ordinal-letter-after-code",
+        "{{x}}ª",
+        "<p><tt>x</tt>ª</p>",
+    ),
+    LiteralCase(
         "jira:hostile:brace-after-closing-braces",
         "{{x}}}값",
         "<p><tt>x</tt>}값</p>",
