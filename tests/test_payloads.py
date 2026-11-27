@@ -44,13 +44,22 @@ def test_create_payload_full():
         assignee="vimkim",
         labels=["a", "b"],
         components=["sql", "broker"],
+        affects_versions=["guava"],
     )
     fields = out["fields"]
     assert fields["priority"] == {"name": "Major"}
     assert fields["assignee"] == {"name": "vimkim"}
     assert fields["labels"] == ["a", "b"]
     assert fields["components"] == [{"name": "sql"}, {"name": "broker"}]
+    assert fields["versions"] == [{"name": "guava"}]
     assert fields["description"] == "body text"
+
+
+def test_transition_payload_with_affects_versions():
+    assert build_transition_payload("701", affects_versions=["guava", "11.4 Patch 7"]) == {
+        "transition": {"id": "701"},
+        "fields": {"versions": [{"name": "guava"}, {"name": "11.4 Patch 7"}]},
+    }
 
 
 def test_link_payload_shape():
@@ -123,6 +132,13 @@ def test_update_payload_components_shape():
     assert build_update_payload(components=["server", "qa"]) == {
         "fields": {"components": [{"name": "server"}, {"name": "qa"}]}
     }
+
+
+def test_update_payload_affects_versions_shape():
+    assert build_update_payload(affects_versions=["guava"]) == {
+        "fields": {"versions": [{"name": "guava"}]}
+    }
+    assert build_update_payload(affects_versions=[]) == {"fields": {"versions": []}}
 
 
 def test_update_payload_full():

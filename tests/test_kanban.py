@@ -14,12 +14,13 @@ from cubrid_jira.http import JiraError
 from cubrid_jira.markdown import format_kanban_markdown
 
 
-def issue(key, status="Develop", summary="[OOS] Korean 한글 | detail\nnext line"):
+def issue(key, status="Develop", summary="[OOS] Korean 한글 | detail\nnext line", versions=None):
     return {
         "key": key,
         "fields": {
             "status": {"name": status},
             "issuetype": {"name": "Task"},
+            "versions": versions if versions is not None else [],
             "summary": summary,
             "updated": "2026-10-22T16:00:00.000+0900",
         },
@@ -44,6 +45,7 @@ def test_fetches_all_pages_when_server_caps_page_size(monkeypatch):
     for jql, kwargs in calls:
         assert "assignee = currentUser()" in jql
         assert "status NOT IN (Closed, Resolved)" in jql
+        assert "versions" in kanban.DISPLAY_FIELDS
         assert kwargs["server"] == "http://jira.cubrid.com"
         assert kwargs["max_results"] == 100
 
@@ -95,11 +97,14 @@ def test_terminal_view_keeps_literal_markup_and_wraps_korean():
 
 def test_markdown_has_group_counts_links_and_escaped_cells():
     markdown = format_kanban_markdown(
-        [("Develop", [issue("CBRD-1")])], server="http://jira.cubrid.com/",
+        [("Develop", [issue("CBRD-1", versions=[{"name": "guava"}])])],
+        server="http://jira.cubrid.com/",
     )
     assert "# My active JIRA tickets (1)" in markdown
     assert "## Develop (1)" in markdown
+    assert "| Key | Type | Affects | Updated | Summary |" in markdown
     assert "[CBRD-1](http://jira.cubrid.com/browse/CBRD-1)" in markdown
+    assert "| guava |" in markdown
     assert "한글 \\| detail next line" in markdown
     assert "| 2026-10-22 |" in markdown
 
@@ -110,8 +115,25 @@ def test_narrow_terminal_gives_summary_more_room():
     kanban.print_kanban([("Open", [issue("CBRD-1", "Open")])], console=console)
     output = stream.getvalue()
     assert "Type" not in output
+    assert "Affects" not in output
     assert "Summary" in output
     assert "CBRD-1" in output
+
+
+def test_wide_terminal_displays_affects_version_column():
+    stream = io.StringIO()
+    console = Console(file=stream, width=120, force_terminal=False, color_system=None)
+    kanban.print_kanban(
+        [("Open", [
+            issue("CBRD-1", "Open", versions=[{"name": "guava"}]),
+            issue("CBRD-2", "Open", versions=[]),
+        ])],
+        console=console,
+    )
+    output = stream.getvalue()
+    assert "Affects" in output
+    assert "guava" in output
+    assert "CBRD-2" in output
 
 
 def test_json_cli_preserves_issues_and_uses_selected_server(fake_server, capsys):

@@ -84,6 +84,9 @@ from cubrid_jira.wizard import (
 )
 
 ALLOWED_LINK_TYPES = ("Blocks", "Cloners", "Duplicate", "Relates")
+AFFECTS_VERSION_REQUIRED_PROJECTS = frozenset({"CBRD", "APIS", "TOOLS"})
+AFFECTS_VERSION_REQUIRED_TYPE = "correct error"
+AFFECTS_VERSION_ALIASES = {"11.5": "guava"}
 DRY_RUN_TOKEN_PLACEHOLDER = "<extracted-at-runtime>"
 DRY_RUN_ISSUETYPE_PLACEHOLDER = "<resolved-at-runtime>"
 
@@ -105,6 +108,36 @@ def _non_negative_int(value: str) -> int:
 # Pure payload builders — kept side-effect-free so tests can call them directly.
 # --------------------------------------------------------------------------- #
 
+def normalize_affects_versions(
+    versions: list[str] | None,
+) -> tuple[list[str] | None, list[tuple[str, str]]]:
+    """Normalize ``--affects-version`` inputs and map aliases like ``11.5`` -> ``guava``."""
+    if versions is None:
+        return None, []
+    normalized: list[str] = []
+    remapped: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for raw in versions:
+        cleaned = raw.strip()
+        if not cleaned:
+            raise ValueError("--affects-version must not be empty")
+        mapped = AFFECTS_VERSION_ALIASES.get(cleaned, cleaned)
+        if mapped != cleaned:
+            remapped.append((cleaned, mapped))
+        if mapped not in seen:
+            seen.add(mapped)
+            normalized.append(mapped)
+    return normalized, remapped
+
+
+def _warn_affects_version_aliases(remapped: list[tuple[str, str]]) -> None:
+    for src, dst in remapped:
+        print(
+            f"Note: normalized Affects Version {src!r} -> {dst!r}.",
+            file=sys.stderr,
+        )
+
+
 def build_create_payload(
     project: str,
     issue_type: str,
@@ -116,6 +149,7 @@ def build_create_payload(
     assignee: str | None = None,
     labels: list[str] | None = None,
     components: list[str] | None = None,
+    affects_versions: list[str] | None = None,
     custom_fields: dict[str, object] | None = None,
 ) -> dict:
     fields: dict = {
@@ -135,6 +169,8 @@ def build_create_payload(
         fields["labels"] = list(labels)
     if components:
         fields["components"] = [{"name": c} for c in components]
+    if affects_versions:
+        fields["versions"] = [{"name": v} for v in affects_versions]
     if custom_fields:
         for k, v in custom_fields.items():
             fields[k] = v
@@ -148,10 +184,11 @@ def build_update_payload(
     priority: str | None = None,
     labels: list[str] | None = None,
     components: list[str] | None = None,
+    affects_versions: list[str] | None = None,
     custom_fields: dict[str, object] | None = None,
 ) -> dict:
-    # labels/components use `is not None` so callers can deliberately pass []
-    # to *clear* the field — Jira treats absent keys and empty lists differently.
+    # labels/components/versions use `is not None` so callers can deliberately
+    # pass [] to *clear* the field — Jira treats absent keys and empty lists differently.
     fields: dict = {}
     if summary is not None:
         fields["summary"] = summary
@@ -163,6 +200,8 @@ def build_update_payload(
         fields["labels"] = list(labels)
     if components is not None:
         fields["components"] = [{"name": c} for c in components]
+    if affects_versions is not None:
+        fields["versions"] = [{"name": v} for v in affects_versions]
     if custom_fields:
         for k, v in custom_fields.items():
             fields[k] = v
@@ -189,11 +228,18 @@ def build_comment_update_payload(body: str) -> dict:
 
 
 def build_transition_payload(
-    transition_id: str, resolution_id: str | None = None
+    transition_id: str,
+    resolution_id: str | None = None,
+    affects_versions: list[str] | None = None,
 ) -> dict:
     payload: dict = {"transition": {"id": transition_id}}
+    fields: dict = {}
     if resolution_id is not None:
-        payload["fields"] = {"resolution": {"id": resolution_id}}
+        fields["resolution"] = {"id": resolution_id}
+    if affects_versions:
+        fields["versions"] = [{"name": v} for v in affects_versions]
+    if fields:
+        payload["fields"] = fields
     return payload
 
 
@@ -228,13 +274,19 @@ def transition_resolution_field(transition: dict) -> dict | None:
     return field if isinstance(field, dict) else None
 
 
+def transition_versions_field(transition: dict) -> dict | None:
+    """The transition screen's ``versions`` (Affects Version/s) field, or None."""
+    field = (transition.get("fields") or {}).get("versions")
+    return field if isinstance(field, dict) else None
+
+
 def compact_transition(transition: dict) -> dict:
     """Listing form of a transition: small and agent-friendly.
 
     ``fields`` (every transition-screen field with its allowed values) is large
-    and mostly irrelevant to agents; only the resolution is worth keeping.
-    ``to`` (the target status) is cut to its ``id`` and ``name``, dropping the
-    self/iconUrl/statusCategory noise.
+    and mostly irrelevant to agents; only ``resolution`` and ``versions``
+    metadata are kept. ``to`` (the target status) is cut to its ``id`` and
+    ``name``, dropping the self/iconUrl/statusCategory noise.
     """
     out = {k: v for k, v in transition.items() if k != "fields"}
     to = out.get("to")
@@ -247,6 +299,11 @@ def compact_transition(transition: dict) -> dict:
             "allowed": [
                 str(v.get("name", "?")) for v in field.get("allowedValues") or []
             ],
+        }
+    vfield = transition_versions_field(transition)
+    if vfield is not None:
+        out["versions"] = {
+            "required": bool(vfield.get("required")),
         }
     return out
 
@@ -733,6 +790,13 @@ def cmd_create(args) -> None:
             args.input_format,
         )
 
+    try:
+        affects_versions, remapped_versions = normalize_affects_versions(args.affects_versions)
+    except ValueError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+    _warn_affects_version_aliases(remapped_versions)
+
     client = _make_client(args)
     try:
         custom = _resolve_custom_fields(args, client)
@@ -746,6 +810,25 @@ def cmd_create(args) -> None:
               "set the parent with --parent KEY only.", file=sys.stderr)
         sys.exit(1)
 
+    if affects_versions is not None and "versions" in custom:
+        print("Error: --field Affects Version/s conflicts with --affects-version; "
+              "set Affects Version/s with --affects-version only.", file=sys.stderr)
+        sys.exit(1)
+
+    if (
+        args.project.strip().upper() in AFFECTS_VERSION_REQUIRED_PROJECTS
+        and args.type.strip().casefold() == AFFECTS_VERSION_REQUIRED_TYPE
+    ):
+        has_versions = bool(affects_versions) or bool(custom.get("versions"))
+        if not has_versions:
+            print(
+                "Error: Affects Version/s is required for Correct Error issues in "
+                "CBRD/APIS/TOOLS. Pass --affects-version VERSION "
+                "(use --affects-version guava for 11.5/develop).",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
     payload = build_create_payload(
         project=args.project,
         issue_type=args.type,
@@ -757,6 +840,7 @@ def cmd_create(args) -> None:
         assignee=args.assignee,
         labels=args.labels,
         components=args.components,
+        affects_versions=affects_versions,
         custom_fields=custom,
     )
 
@@ -1196,6 +1280,10 @@ def _transition_list_line(t: dict) -> str:
             f"  [resolution ({req}) via --resolution: "
             f"{_allowed_resolution_names(field)}]"
         )
+    vfield = transition_versions_field(t)
+    if vfield is not None:
+        req = "required" if vfield.get("required") else "optional"
+        line += f"  [versions ({req}) via --affects-version]"
     return line
 
 
@@ -1204,7 +1292,7 @@ def cmd_transition(args) -> None:
     client = _make_client(args)
 
     # expand=transitions.fields adds each transition screen's fields, which is
-    # where JIRA exposes the resolution a resolving transition would set.
+    # where JIRA exposes the resolution and Affects Version/s fields.
     resp = client.request(
         "GET", f"/rest/api/2/issue/{key}/transitions?expand=transitions.fields"
     )
@@ -1213,6 +1301,9 @@ def cmd_transition(args) -> None:
     if not args.to:
         if args.resolution is not None:
             print("Error: --resolution requires --to.", file=sys.stderr)
+            sys.exit(1)
+        if args.affects_versions is not None:
+            print("Error: --affects-version requires --to.", file=sys.stderr)
             sys.exit(1)
         if _output_format(args) == "json":
             print(json.dumps(
@@ -1229,6 +1320,13 @@ def cmd_transition(args) -> None:
         return
 
     try:
+        affects_versions, remapped_versions = normalize_affects_versions(args.affects_versions)
+    except ValueError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+    _warn_affects_version_aliases(remapped_versions)
+
+    try:
         tid = resolve_transition_id(transitions, args.to)
         transition = next(t for t in transitions if str(t["id"]) == tid)
         resolution = resolve_resolution(transition, args.resolution)
@@ -1236,9 +1334,24 @@ def cmd_transition(args) -> None:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
 
+    if affects_versions and transition_versions_field(transition) is None:
+        tname = transition.get("name", "?")
+        print(
+            f"Error: Transition {tname!r} has no Affects Version/s field; "
+            f"set it with `cubrid-jira update {key} --affects-version "
+            f"{' '.join(affects_versions)}` instead.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
     if resolution is not None and _output_format(args) == "text":
         print(
             f"Resolution: {resolution['name']} (id {resolution['id']})",
+            file=sys.stderr,
+        )
+    if affects_versions and _output_format(args) == "text":
+        print(
+            f"Affects Version/s: {', '.join(affects_versions)}",
             file=sys.stderr,
         )
 
@@ -1246,14 +1359,20 @@ def cmd_transition(args) -> None:
         "POST",
         f"/rest/api/2/issue/{key}/transitions",
         body=build_transition_payload(
-            tid, resolution["id"] if resolution else None
+            tid,
+            resolution["id"] if resolution else None,
+            affects_versions=affects_versions,
         ),
     )
 
-    resolution_extra = {"resolution": resolution} if resolution else {}
+    transition_extra: dict = {}
+    if resolution:
+        transition_extra["resolution"] = resolution
+    if affects_versions:
+        transition_extra["affects_versions"] = affects_versions
 
     if _is_dry_run(args):
-        _emit(args, client, None, dry_run_extra=resolution_extra)
+        _emit(args, client, None, dry_run_extra=transition_extra)
         return
 
     cache_dir = resolve_cache_dir(args.dir, server=args.server)
@@ -1266,7 +1385,7 @@ def cmd_transition(args) -> None:
     _emit(
         args,
         client,
-        {"issue": key, "transition_id": tid, "to": args.to, **resolution_extra},
+        {"issue": key, "transition_id": tid, "to": args.to, **transition_extra},
     )
 
 
@@ -1309,11 +1428,23 @@ def cmd_update(args) -> None:
             allow_stdin=True,
         )
 
+    try:
+        affects_versions, remapped_versions = normalize_affects_versions(args.affects_versions)
+    except ValueError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+    _warn_affects_version_aliases(remapped_versions)
+
     client = _make_client(args)
     try:
         custom = _resolve_custom_fields(args, client)
     except (FieldSpecError, AmbiguousFieldError) as e:
         print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    if affects_versions is not None and "versions" in custom:
+        print("Error: --field Affects Version/s conflicts with --affects-version; "
+              "set Affects Version/s with --affects-version only.", file=sys.stderr)
         sys.exit(1)
 
     payload = build_update_payload(
@@ -1322,13 +1453,14 @@ def cmd_update(args) -> None:
         priority=args.priority,
         labels=args.labels,
         components=args.components,
+        affects_versions=affects_versions,
         custom_fields=custom,
     )
     if not payload["fields"]:
         print(
             "Error: nothing to update; pass at least one of "
             "--description-file / --summary / --priority / --label / "
-            "--component / --field",
+            "--component / --affects-version / --field",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -1821,6 +1953,21 @@ def _add_field_flag(p: argparse.ArgumentParser) -> None:
     )
 
 
+def _add_affects_version_flag(p: argparse.ArgumentParser) -> None:
+    p.add_argument(
+        "--affects-version",
+        action="append",
+        dest="affects_versions",
+        default=None,
+        metavar="VERSION",
+        help=(
+            "Affects Version/s name (e.g. guava). Repeat for multiple versions. "
+            "Required for Correct Error in CBRD/APIS/TOOLS; '11.5' normalizes "
+            "to 'guava'."
+        ),
+    )
+
+
 def _add_write_globals(p: argparse.ArgumentParser) -> None:
     p.add_argument(
         "--dry-run",
@@ -1998,6 +2145,7 @@ def _build_parser() -> argparse.ArgumentParser:
                           help="Repeat for multiple labels.")
     p_create.add_argument("--component", action="append", dest="components",
                           metavar="NAME", help="Repeat for multiple components.")
+    _add_affects_version_flag(p_create)
     p_create.add_argument("--link-relates", action="append", dest="link_relates",
                           metavar="KEY",
                           help="After creation, link the new issue as 'Relates' to KEY.")
@@ -2118,6 +2266,7 @@ def _build_parser() -> argparse.ArgumentParser:
             "Omit --to to see which transitions carry one and the allowed names."
         ),
     )
+    _add_affects_version_flag(p_transition)
     _add_write_globals(p_transition)
     p_transition.set_defaults(func=cmd_transition)
 
@@ -2150,6 +2299,7 @@ def _build_parser() -> argparse.ArgumentParser:
                           metavar="NAME", default=None,
                           help="Repeat for multiple components. NOTE: replaces the "
                                "full component list.")
+    _add_affects_version_flag(p_update)
     _add_field_flag(p_update)
     _add_body_input_flag(p_update, "--description-file")
     _add_write_globals(p_update)

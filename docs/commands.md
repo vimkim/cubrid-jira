@@ -206,6 +206,7 @@ cubrid-jira create         --project KEY --type TYPE --summary TEXT
                            [--parent KEY] [--description-file PATH]
                            [--priority NAME] [--assignee USER]
                            [--label L ...] [--component C ...]
+                           [--affects-version VER ...]
                            [--link-relates KEY] [--link-blocks KEY]
                            [--field FIELD=VALUE ...] [--from {markdown,jira}]
 cubrid-jira comment        ISSUE --body-file PATH [--from {markdown,jira}]
@@ -213,9 +214,11 @@ cubrid-jira comment-update ISSUE --id COMMENT-ID --body-file PATH [--from {markd
 cubrid-jira comment-delete ISSUE --id COMMENT-ID
 cubrid-jira link           ISSUE --type {Blocks,Cloners,Duplicate,Relates} --to KEY
 cubrid-jira transition     ISSUE [--to NAME] [--resolution NAME]
+                           [--affects-version VER ...]
 cubrid-jira assign         ISSUE --to USER
 cubrid-jira update         ISSUE [--summary TEXT] [--description-file PATH]
                            [--priority NAME] [--label L ...] [--component C ...]
+                           [--affects-version VER ...]
                            [--field FIELD=VALUE ...] [--from {markdown,jira}]
 ```
 
@@ -227,11 +230,17 @@ stderr. With `--output json`, the key and URL are in the JSON result on stdout.
 ```sh
 cubrid-jira create --project CBRD --type Bug --summary "csql crashes on an empty table" \
   --description-file bug.md --priority Major --link-relates CBRD-XXXXX
+cubrid-jira create --project CBRD --type "Correct Error" --summary "fix crash" \
+  --affects-version guava
 ```
 
 - `--type Sub-task` requires `--parent KEY`. The CLI rejects a missing or
   malformed parent key before sending anything. If a `--field` also resolves
   to `parent`, its value must match `--parent`.
+- `--type "Correct Error"` in `CBRD`, `APIS`, or `TOOLS` requires
+  `--affects-version VERSION` (or `Affects Version/s` via `--field`), even in
+  dry-run mode. Pass `--affects-version guava` for `11.5` development defects
+  (`11.5` automatically normalizes to `guava`).
 - `--priority` is set by a second request. The `CBRD` create screen rejects
   `priority` with HTTP 400, so the CLI sends the POST without it and then a
   `PUT /rest/api/2/issue/<key>` that sets only the priority. The dry run shows
@@ -281,6 +290,7 @@ cubrid-jira link CBRD-XXXXX --type Relates --to CBRD-YYYYY
 cubrid-jira transition CBRD-XXXXX
 cubrid-jira transition CBRD-XXXXX --to "In Progress"
 cubrid-jira transition CBRD-XXXXX --to "Bug Invalid" --resolution "Not a bug"
+cubrid-jira transition CBRD-XXXXX --to "Confirmed" --affects-version guava
 ```
 
 Without `--to`, `transition` lists the transitions available from the current
@@ -294,6 +304,11 @@ edited afterwards. So when the chosen transition carries a `resolution` field,
 matches the name against the allowed values without regard to case and sends
 it by id.
 
+Triage transitions (such as `Open` -> `Confirmed` on `Correct Error` issues in
+`CBRD`, `APIS`, and `TOOLS`) carry `Affects Version/s` (`versions`). Pass
+`--affects-version VERSION` (repeated if needed) when setting it on the
+transition screen (`11.5` normalizes to `guava`).
+
 `transition` exits with code 1 and lists the allowed names when:
 
 - the transition needs a resolution and `--resolution` is missing,
@@ -303,7 +318,7 @@ it by id.
 
 This check also runs in a dry run, so you see the problem before you add
 `--yes`. The transition list marks each transition that requires a resolution
-and shows its allowed names.
+or exposes `versions` and shows its allowed resolution names.
 
 #### `assign`
 
@@ -317,15 +332,17 @@ cubrid-jira assign CBRD-XXXXX --to ""
 #### `update`
 
 `update` edits fields of an existing issue. Give at least one of `--summary`,
-`--description-file`, `--priority`, `--label`, `--component`, or `--field`.
+`--description-file`, `--priority`, `--label`, `--component`,
+`--affects-version`, or `--field`.
 
 ```sh
 cubrid-jira update CBRD-XXXXX --description-file notes.md
 cubrid-jira update CBRD-XXXXX --label oos --label vacuum
+cubrid-jira update CBRD-XXXXX --affects-version guava
 ```
 
-- `--label` and `--component` replace the whole list. To add one label, pass
-  the existing labels too.
+- `--label`, `--component`, and `--affects-version` replace the whole list. To
+  add one value, pass the existing values too. (`11.5` normalizes to `guava`.)
 - `--description-file -` reads the description from stdin.
 
 ### Set any field with `--field`

@@ -558,17 +558,21 @@ def format_kanban_markdown(
     for status, issues in groups:
         lines.extend([
             "", f"## {_md_cell(status)} ({len(issues)})", "",
-            "| Key | Type | Updated | Summary |",
-            "|---|---|---|---|",
+            "| Key | Type | Affects | Updated | Summary |",
+            "|---|---|---|---|---|",
         ])
         for issue in issues:
             key = issue["key"]
             fields = issue.get("fields", {})
             issue_type = _md_cell((fields.get("issuetype") or {}).get("name", "?"))
+            affects = _md_cell(", ".join(
+                v["name"] for v in (fields.get("versions") or [])
+                if isinstance(v, dict) and v.get("name")
+            ) or "-")
             updated = _md_cell((fields.get("updated") or "")[:10])
             summary = _md_cell(fields.get("summary") or "")
             lines.append(
-                f"| [{key}]({base}/browse/{key}) | {issue_type} | {updated} | {summary} |"
+                f"| [{key}]({base}/browse/{key}) | {issue_type} | {affects} | {updated} | {summary} |"
             )
     return "\n".join(lines)
 
@@ -612,6 +616,14 @@ def format_issue_markdown(data: dict, *, server: str = DEFAULT_SERVER) -> str:
     components = [c["name"] for c in fields.get("components", [])]
     if components:
         lines.append(f"| Components | {', '.join(components)} |")
+
+    affects_versions = [
+        v["name"]
+        for v in fields.get("versions", []) or []
+        if isinstance(v, dict) and v.get("name")
+    ]
+    if affects_versions:
+        lines.append(f"| Affects Version | {', '.join(affects_versions)} |")
 
     fix_versions = [v["name"] for v in fields.get("fixVersions", [])]
     if fix_versions:

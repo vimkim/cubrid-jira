@@ -22,7 +22,7 @@ MY_ACTIVE_JQL = (
     "assignee = currentUser() AND status NOT IN (Closed, Resolved) "
     "ORDER BY updated DESC, key ASC"
 )
-DISPLAY_FIELDS = "summary,status,issuetype,assignee,updated"
+DISPLAY_FIELDS = "summary,status,issuetype,versions,assignee,updated"
 STATUS_ORDER = ("Open", "Reopened", "Confirmed", "Develop", "Test", "Handover")
 STATUS_COLORS = {
     "Open": "yellow",
@@ -95,6 +95,7 @@ def print_kanban(
     console.print(Text("  ·  ".join(f"{status}: {len(issues)}" for status, issues in groups)))
     base = normalize_server(server)
     show_type = console.width >= 100
+    show_affects = console.width >= 120
     for status, issues in groups:
         console.print()
         table = Table(
@@ -105,17 +106,25 @@ def print_kanban(
         table.add_column("Key", no_wrap=True)
         if show_type:
             table.add_column("Type", max_width=24, overflow="fold")
+        if show_affects:
+            table.add_column("Affects", max_width=24, overflow="fold")
         table.add_column("Updated", no_wrap=True)
         table.add_column("Summary", ratio=1, overflow="fold")
         for issue in issues:
             fields = issue.get("fields", {})
             key = issue["key"]
             issue_type = (fields.get("issuetype") or {}).get("name") or "?"
+            affects = ", ".join(
+                v["name"] for v in (fields.get("versions") or [])
+                if isinstance(v, dict) and v.get("name")
+            ) or "-"
             updated = (fields.get("updated") or "")[:10]
             summary = " ".join((fields.get("summary") or "").split())
             row = [Text(key, style=f"link {base}/browse/{key}")]
             if show_type:
                 row.append(Text(issue_type))
+            if show_affects:
+                row.append(Text(affects))
             table.add_row(*row, Text(updated), Text(summary))
         console.print(table)
 

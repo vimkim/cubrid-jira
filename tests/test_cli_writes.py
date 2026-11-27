@@ -1584,3 +1584,175 @@ def test_write_refuses_body_whose_markup_still_touches_korean(
     err = capsys.readouterr().err
     assert "line 2, col 14: * *{{REC_HOME}}이 아닌 행.*" in err
     assert "Refusing to send" in err
+
+
+# --------------------------------------------------------------------------- #
+# --affects-version (Correct Error rule & 11.5 -> guava normalization)
+# --------------------------------------------------------------------------- #
+
+@pytest.mark.parametrize("project", ["CBRD", "APIS", "TOOLS"])
+@pytest.mark.parametrize("live", [False, True])
+def test_create_correct_error_requires_affects_version(
+    fake_server, tmp_path, monkeypatch, capsys, project, live
+):
+    monkeypatch.setenv("CUBRID_JIRA_DIR", str(tmp_path))
+    with pytest.raises(SystemExit) as exc:
+        main([
+            "create",
+            "--project", project,
+            "--type", "Correct Error",
+            "--summary", "missing affects version",
+            *(["--yes"] if live else []),
+        ])
+    assert exc.value.code == 1
+    assert fake_server.requests == []
+    err = capsys.readouterr().err
+    assert "Affects Version/s is required" in err
+    assert "--affects-version guava" in err
+
+
+def test_create_task_without_affects_version_succeeds(
+    fake_server, tmp_path, monkeypatch, capsys
+):
+    monkeypatch.setenv("CUBRID_JIRA_DIR", str(tmp_path))
+    main([
+        "create",
+        "--project", "CBRD",
+        "--type", "Task",
+        "--summary", "non-bug task",
+    ])
+    body = json.loads(capsys.readouterr().out)
+    assert "versions" not in body["fields"]
+
+
+def test_create_correct_error_normalizes_11_5_to_guava(
+    fake_server, tmp_path, monkeypatch, capsys
+):
+    monkeypatch.setenv("CUBRID_JIRA_DIR", str(tmp_path))
+    main([
+        "create",
+        "--project", "CBRD",
+        "--type", "Correct Error",
+        "--summary", "11.5 crash",
+        "--affects-version", "11.5",
+        "--affects-version", "guava",
+    ])
+    out = capsys.readouterr()
+    assert "normalized Affects Version '11.5' -> 'guava'" in out.err
+    body = json.loads(out.out)
+    assert body["fields"]["versions"] == [{"name": "guava"}]
+
+
+def test_create_correct_error_accepts_field_affects_versions_and_rejects_conflict(
+    fake_server, tmp_path, monkeypatch, capsys
+):
+    monkeypatch.setenv("CUBRID_JIRA_DIR", str(tmp_path))
+    (tmp_path / "field-map.json").write_text(json.dumps({
+        "Affects Version/s": ["versions"],
+    }))
+    main([
+        "create",
+        "--project", "CBRD",
+        "--type", "Correct Error",
+        "--summary", "via --field",
+        "--field", 'Affects Version/s=[{"name":"guava"}]',
+    ])
+    body = json.loads(capsys.readouterr().out)
+    assert body["fields"]["versions"] == [{"name": "guava"}]
+
+    with pytest.raises(SystemExit) as exc:
+        main([
+            "create",
+            "--project", "CBRD",
+            "--type", "Correct Error",
+            "--summary", "conflict",
+            "--affects-version", "guava",
+            "--field", 'Affects Version/s=[{"name":"guava"}]',
+        ])
+    assert exc.value.code == 1
+    assert "conflicts with --affects-version" in capsys.readouterr().err
+
+
+def test_update_affects_version_sends_versions_payload(
+    fake_server, tmp_path, monkeypatch
+):
+    monkeypatch.setenv("CUBRID_JIRA_DIR", str(tmp_path))
+    fake_server.route("PUT", "/rest/api/2/issue/CBRD-9", response=None)
+    main([
+        "update", "CBRD-9",
+        "--affects-version", "11.5",
+        "--affects-version", "11.4 Patch 7",
+        "--yes",
+    ])
+    rec = next(r for r in fake_server.requests if r.method == "PUT")
+    assert json.loads(rec.body.decode()) == {
+        "fields": {"versions": [{"name": "guava"}, {"name": "11.4 Patch 7"}]}
+    }
+
+
+def test_transition_with_affects_version_sets_versions_when_supported(
+    fake_server, tmp_path, monkeypatch, capsys
+):
+    monkeypatch.setenv("CUBRID_JIRA_DIR", str(tmp_path))
+    fake_server.route(
+        "GET", TRANSITIONS_GET_CBRD_7,
+        response={"transitions": [{
+            "id": "801",
+            "name": "Triage",
+            "fields": {
+                "versions": {"required": False, "allowedValues": [{"name": "guava"}]},
+            },
+        }]},
+    )
+    fake_server.route("POST", "/rest/api/2/issue/CBRD-7/transitions", response={})
+
+    main([
+        "transition", "CBRD-7",
+        "--to", "Triage",
+        "--affects-version", "11.5",
+        "--yes",
+        "--output", "json",
+    ])
+    post = next(r for r in fake_server.requests if r.method == "POST")
+    assert json.loads(post.body.decode()) == {
+        "transition": {"id": "801"},
+        "fields": {"versions": [{"name": "guava"}]},
+    }
+    res = json.loads(capsys.readouterr().out)
+    assert res["affects_versions"] == ["guava"]
+
+
+def test_transition_with_affects_version_errors_when_screen_lacks_field(
+    fake_server, tmp_path, monkeypatch, capsys
+):
+    monkeypatch.setenv("CUBRID_JIRA_DIR", str(tmp_path))
+    fake_server.route(
+        "GET", TRANSITIONS_GET_CBRD_7,
+        response={"transitions": [{"id": "801", "name": "Start Develop", "fields": {}}]},
+    )
+    with pytest.raises(SystemExit) as exc:
+        main([
+            "transition", "CBRD-7",
+            "--to", "Start Develop",
+            "--affects-version", "guava",
+        ])
+    assert exc.value.code == 1
+    assert "has no Affects Version/s field" in capsys.readouterr().err
+    assert [r.method for r in fake_server.requests] == ["GET"]
+
+
+def test_format_issue_markdown_renders_affects_version():
+    rendered = markdown.format_issue_markdown({
+        "key": "CBRD-1",
+        "fields": {
+            "summary": "bug",
+            "status": {"name": "Open"},
+            "priority": {"name": "Major"},
+            "issuetype": {"name": "Correct Error"},
+            "versions": [{"name": "guava"}, {"name": "11.4 Patch 7"}],
+            "fixVersions": [],
+            "created": "2026-11-27T00:00:00.000+0900",
+            "updated": "2026-11-27T00:00:00.000+0900",
+        },
+    })
+    assert "| Affects Version | guava, 11.4 Patch 7 |" in rendered
