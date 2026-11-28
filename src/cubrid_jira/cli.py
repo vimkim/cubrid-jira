@@ -19,6 +19,7 @@ single-line JSON result object for downstream pipelines.
 from __future__ import annotations
 
 import argparse
+import difflib
 import json
 import re
 import sys
@@ -87,6 +88,11 @@ ALLOWED_LINK_TYPES = ("Blocks", "Cloners", "Duplicate", "Relates")
 AFFECTS_VERSION_REQUIRED_PROJECTS = frozenset({"CBRD", "APIS", "TOOLS"})
 AFFECTS_VERSION_REQUIRED_TYPE = "correct error"
 AFFECTS_VERSION_ALIASES = {"11.5": "guava"}
+# A workflow validator (not the screen's `required` flag, which is false)
+# rejects this transition with HTTP 400 when the issue has no Fix Version/s.
+FIX_VERSION_REQUIRED_TRANSITIONS = frozenset({"check in fix"})
+# Version-array system fields: `--field` wraps a plain string as [{"name": s}].
+VERSION_ARRAY_FIELDS = frozenset({"versions", "fixVersions"})
 DRY_RUN_TOKEN_PLACEHOLDER = "<extracted-at-runtime>"
 DRY_RUN_ISSUETYPE_PLACEHOLDER = "<resolved-at-runtime>"
 
@@ -128,6 +134,20 @@ def normalize_affects_versions(
             seen.add(mapped)
             normalized.append(mapped)
     return normalized, remapped
+
+
+def normalize_fix_versions(versions: list[str] | None) -> list[str] | None:
+    """Strip and de-duplicate ``--fix-version`` inputs; reject empty names."""
+    if versions is None:
+        return None
+    normalized: list[str] = []
+    for raw in versions:
+        cleaned = raw.strip()
+        if not cleaned:
+            raise ValueError("--fix-version must not be empty")
+        if cleaned not in normalized:
+            normalized.append(cleaned)
+    return normalized
 
 
 def _warn_affects_version_aliases(remapped: list[tuple[str, str]]) -> None:
@@ -185,9 +205,10 @@ def build_update_payload(
     labels: list[str] | None = None,
     components: list[str] | None = None,
     affects_versions: list[str] | None = None,
+    fix_versions: list[str] | None = None,
     custom_fields: dict[str, object] | None = None,
 ) -> dict:
-    # labels/components/versions use `is not None` so callers can deliberately
+    # labels/components/versions/fixVersions use `is not None` so callers can deliberately
     # pass [] to *clear* the field — Jira treats absent keys and empty lists differently.
     fields: dict = {}
     if summary is not None:
@@ -202,6 +223,8 @@ def build_update_payload(
         fields["components"] = [{"name": c} for c in components]
     if affects_versions is not None:
         fields["versions"] = [{"name": v} for v in affects_versions]
+    if fix_versions is not None:
+        fields["fixVersions"] = [{"name": v} for v in fix_versions]
     if custom_fields:
         for k, v in custom_fields.items():
             fields[k] = v
@@ -231,6 +254,7 @@ def build_transition_payload(
     transition_id: str,
     resolution_id: str | None = None,
     affects_versions: list[str] | None = None,
+    fix_versions: list[str] | None = None,
 ) -> dict:
     payload: dict = {"transition": {"id": transition_id}}
     fields: dict = {}
@@ -238,6 +262,8 @@ def build_transition_payload(
         fields["resolution"] = {"id": resolution_id}
     if affects_versions:
         fields["versions"] = [{"name": v} for v in affects_versions]
+    if fix_versions:
+        fields["fixVersions"] = [{"name": v} for v in fix_versions]
     if fields:
         payload["fields"] = fields
     return payload
@@ -280,12 +306,68 @@ def transition_versions_field(transition: dict) -> dict | None:
     return field if isinstance(field, dict) else None
 
 
+def transition_fix_versions_field(transition: dict) -> dict | None:
+    """The transition screen's ``fixVersions`` (Fix Version/s) field, or None."""
+    field = (transition.get("fields") or {}).get("fixVersions")
+    return field if isinstance(field, dict) else None
+
+
+def transition_requires_fix_version(transition: dict) -> bool:
+    """True when JIRA rejects ``transition`` on an issue without Fix Version/s.
+
+    ``Check in fix`` is enforced by a workflow validator, so its screen field
+    reports ``required: false``; the name decides for it.
+    """
+    name = str(transition.get("name", "")).strip().casefold()
+    if name in FIX_VERSION_REQUIRED_TRANSITIONS:
+        return True
+    field = transition_fix_versions_field(transition)
+    return bool(field and field.get("required"))
+
+
+def resolve_fix_versions(transition: dict, wanted: list[str]) -> list[str]:
+    """Match ``--fix-version`` names against the transition screen's allowed values.
+
+    Matching ignores case and returns JIRA's spelling. A screen without
+    ``allowedValues`` passes the names through unchanged.
+    """
+    field = transition_fix_versions_field(transition)
+    name = transition.get("name", "?")
+    if field is None:
+        raise ValueError(f"Transition {name!r} has no Fix Version/s field")
+    allowed = [
+        str(v.get("name", "")) for v in field.get("allowedValues") or []
+        if isinstance(v, dict) and v.get("name")
+    ]
+    if not allowed:
+        return list(wanted)
+    by_key: dict[str, str] = {}
+    for a in allowed:
+        by_key.setdefault(a.strip().casefold(), a)
+    resolved: list[str] = []
+    for w in wanted:
+        hit = by_key.get(w.strip().casefold())
+        if hit is None:
+            close = difflib.get_close_matches(w, allowed, n=5, cutoff=0.5)
+            hint = (
+                f" Close matches: {', '.join(repr(c) for c in close)}."
+                if close else ""
+            )
+            raise ValueError(
+                f"Fix Version {w!r} is not allowed for transition {name!r} "
+                f"({len(allowed)} versions allowed).{hint}"
+            )
+        if hit not in resolved:
+            resolved.append(hit)
+    return resolved
+
+
 def compact_transition(transition: dict) -> dict:
     """Listing form of a transition: small and agent-friendly.
 
     ``fields`` (every transition-screen field with its allowed values) is large
     and mostly irrelevant to agents; only ``resolution`` and ``versions``
-    metadata are kept. ``to`` (the target status) is cut to its ``id`` and
+    metadata are kept, plus ``fixVersions`` when the transition requires it. ``to`` (the target status) is cut to its ``id`` and
     ``name``, dropping the self/iconUrl/statusCategory noise.
     """
     out = {k: v for k, v in transition.items() if k != "fields"}
@@ -305,6 +387,9 @@ def compact_transition(transition: dict) -> dict:
         out["versions"] = {
             "required": bool(vfield.get("required")),
         }
+    # Most screens carry an optional fixVersions; list it only where it is needed.
+    if transition_requires_fix_version(transition):
+        out["fixVersions"] = {"required": True}
     return out
 
 
@@ -443,8 +528,13 @@ def _resolve_custom_fields(args, client: JiraClient) -> dict[str, object]:
     Resolution order per FIELD:
       1. raw ``customfield_\\d+`` id → used verbatim, no network.
       2. display name → resolved against the on-disk name->id cache.
-      3. cache miss → one ``GET /rest/api/2/field`` (executes even in
+      3. a known field id such as the system id ``fixVersions`` → used
+         verbatim (the cache lists ids as well as names).
+      4. cache miss → one ``GET /rest/api/2/field`` (executes even in
          dry-run, since GET is a read) refreshes the cache, then re-resolves.
+
+    A plain string sent to a version-array system field (``versions``,
+    ``fixVersions``) is wrapped as ``[{"name": VALUE}]`` (``""`` clears it).
 
     Errors are raised as ``FieldSpecError`` / ``AmbiguousFieldError`` —
     the caller is responsible for translating those to a CLI exit.
@@ -470,8 +560,12 @@ def _resolve_custom_fields(args, client: JiraClient) -> dict[str, object]:
     )
     index = load_field_index(map_path)
 
+    def known_ids() -> set[str]:
+        return {fid for ids in index.values() for fid in ids}
+
     needed = [n for n, _ in parsed if not is_custom_field_id(n)]
-    if any(n not in index for n in needed):
+    ids = known_ids()
+    if any(n not in index and n not in ids for n in needed):
         listing = client.request("GET", "/rest/api/2/field")
         # Jira Server returns a bare JSON array; tolerate {"fields": [...]} too.
         if isinstance(listing, dict):
@@ -480,6 +574,7 @@ def _resolve_custom_fields(args, client: JiraClient) -> dict[str, object]:
             listing = []
         index = build_name_index(listing)
         save_field_index(map_path, index)
+        ids = known_ids()
 
     out: dict[str, object] = {}
     for name, value in parsed:
@@ -487,6 +582,10 @@ def _resolve_custom_fields(args, client: JiraClient) -> dict[str, object]:
             out[name] = value
             continue
         fid = resolve_name(name, index)
+        if fid is None and name in ids:
+            fid = name
+        if fid in VERSION_ARRAY_FIELDS and isinstance(value, str):
+            value = [{"name": value.strip()}] if value.strip() else []
         if fid is None:
             raise FieldSpecError(
                 f"unknown JIRA field name {name!r}. "
@@ -1284,6 +1383,8 @@ def _transition_list_line(t: dict) -> str:
     if vfield is not None:
         req = "required" if vfield.get("required") else "optional"
         line += f"  [versions ({req}) via --affects-version]"
+    if transition_requires_fix_version(t):
+        line += "  [fixVersions (required) via --fix-version]"
     return line
 
 
@@ -1304,6 +1405,9 @@ def cmd_transition(args) -> None:
             sys.exit(1)
         if args.affects_versions is not None:
             print("Error: --affects-version requires --to.", file=sys.stderr)
+            sys.exit(1)
+        if args.fix_versions is not None:
+            print("Error: --fix-version requires --to.", file=sys.stderr)
             sys.exit(1)
         if _output_format(args) == "json":
             print(json.dumps(
@@ -1327,6 +1431,7 @@ def cmd_transition(args) -> None:
     _warn_affects_version_aliases(remapped_versions)
 
     try:
+        fix_versions = normalize_fix_versions(args.fix_versions)
         tid = resolve_transition_id(transitions, args.to)
         transition = next(t for t in transitions if str(t["id"]) == tid)
         resolution = resolve_resolution(transition, args.resolution)
@@ -1334,8 +1439,39 @@ def cmd_transition(args) -> None:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
 
+    tname = transition.get("name", "?")
+    if fix_versions:
+        if transition_fix_versions_field(transition) is None:
+            print(
+                f"Error: Transition {tname!r} has no Fix Version/s field; "
+                f"set it with `cubrid-jira update {key} --fix-version "
+                f"{' '.join(fix_versions)}` instead.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        try:
+            fix_versions = resolve_fix_versions(transition, fix_versions)
+        except ValueError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            sys.exit(1)
+    elif transition_requires_fix_version(transition):
+        # A read, so it runs in dry-run too: catch the validator's HTTP 400
+        # before --yes instead of after.
+        current = client.request("GET", f"/rest/api/2/issue/{key}?fields=fixVersions")
+        existing = [
+            v.get("name") for v in ((current or {}).get("fields") or {}).get("fixVersions") or []
+            if isinstance(v, dict) and v.get("name")
+        ]
+        if not existing:
+            print(
+                f"Error: Transition {tname!r} requires Fix Version/s, and {key} "
+                "has none. Pass --fix-version VERSION (e.g. --fix-version guava "
+                "for 11.5/develop).",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
     if affects_versions and transition_versions_field(transition) is None:
-        tname = transition.get("name", "?")
         print(
             f"Error: Transition {tname!r} has no Affects Version/s field; "
             f"set it with `cubrid-jira update {key} --affects-version "
@@ -1354,6 +1490,8 @@ def cmd_transition(args) -> None:
             f"Affects Version/s: {', '.join(affects_versions)}",
             file=sys.stderr,
         )
+    if fix_versions and _output_format(args) == "text":
+        print(f"Fix Version/s: {', '.join(fix_versions)}", file=sys.stderr)
 
     client.request(
         "POST",
@@ -1362,6 +1500,7 @@ def cmd_transition(args) -> None:
             tid,
             resolution["id"] if resolution else None,
             affects_versions=affects_versions,
+            fix_versions=fix_versions,
         ),
     )
 
@@ -1370,6 +1509,8 @@ def cmd_transition(args) -> None:
         transition_extra["resolution"] = resolution
     if affects_versions:
         transition_extra["affects_versions"] = affects_versions
+    if fix_versions:
+        transition_extra["fix_versions"] = fix_versions
 
     if _is_dry_run(args):
         _emit(args, client, None, dry_run_extra=transition_extra)
@@ -1434,6 +1575,11 @@ def cmd_update(args) -> None:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
     _warn_affects_version_aliases(remapped_versions)
+    try:
+        fix_versions = normalize_fix_versions(args.fix_versions)
+    except ValueError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
 
     client = _make_client(args)
     try:
@@ -1446,6 +1592,10 @@ def cmd_update(args) -> None:
         print("Error: --field Affects Version/s conflicts with --affects-version; "
               "set Affects Version/s with --affects-version only.", file=sys.stderr)
         sys.exit(1)
+    if fix_versions is not None and "fixVersions" in custom:
+        print("Error: --field Fix Version/s conflicts with --fix-version; "
+              "set Fix Version/s with --fix-version only.", file=sys.stderr)
+        sys.exit(1)
 
     payload = build_update_payload(
         summary=args.summary,
@@ -1454,13 +1604,14 @@ def cmd_update(args) -> None:
         labels=args.labels,
         components=args.components,
         affects_versions=affects_versions,
+        fix_versions=fix_versions,
         custom_fields=custom,
     )
     if not payload["fields"]:
         print(
             "Error: nothing to update; pass at least one of "
             "--description-file / --summary / --priority / --label / "
-            "--component / --affects-version / --field",
+            "--component / --affects-version / --fix-version / --field",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -1968,6 +2119,21 @@ def _add_affects_version_flag(p: argparse.ArgumentParser) -> None:
     )
 
 
+def _add_fix_version_flag(p: argparse.ArgumentParser) -> None:
+    p.add_argument(
+        "--fix-version",
+        action="append",
+        dest="fix_versions",
+        default=None,
+        metavar="VERSION",
+        help=(
+            "Fix Version/s name (e.g. guava). Repeat for multiple versions. "
+            "'Check in fix' needs one unless the issue already has it; "
+            "on update it replaces the whole list."
+        ),
+    )
+
+
 def _add_write_globals(p: argparse.ArgumentParser) -> None:
     p.add_argument(
         "--dry-run",
@@ -2267,6 +2433,7 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     _add_affects_version_flag(p_transition)
+    _add_fix_version_flag(p_transition)
     _add_write_globals(p_transition)
     p_transition.set_defaults(func=cmd_transition)
 
@@ -2300,6 +2467,7 @@ def _build_parser() -> argparse.ArgumentParser:
                           help="Repeat for multiple components. NOTE: replaces the "
                                "full component list.")
     _add_affects_version_flag(p_update)
+    _add_fix_version_flag(p_update)
     _add_field_flag(p_update)
     _add_body_input_flag(p_update, "--description-file")
     _add_write_globals(p_update)

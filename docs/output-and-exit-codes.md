@@ -47,7 +47,9 @@ four requests. A `reparent` returns six wizard POSTs.
 | `reparent` | `{"issue": "CBRD-1", "from_parent": "CBRD-X", "to_parent": "CBRD-Y"}` |
 
 When a transition carries a resolution, both the dry-run and the live result
-add `"resolution": {"id": "7", "name": "Not a bug"}`.
+add `"resolution": {"id": "7", "name": "Not a bug"}`. `--affects-version` adds
+`"affects_versions": [names]`, and `--fix-version` adds
+`"fix_versions": [names]` in JIRA's spelling.
 
 ### Read shapes
 
@@ -57,7 +59,7 @@ add `"resolution": {"id": "7", "name": "Not a bug"}`.
 | `comment-list` | `{"issue", "total", "comments": [{"id", "author", "created", "body"}]}`. `author` is the display name. |
 | `lint` FILE | `{"target", "kind": "file", "ok", "problems"}`, plus `"body"` (the converted Jira body) with `--fix`. Each problem is `{"location": "body", "line", "column", "marker", "text"}`. |
 | `lint` KEY | `{"target", "kind": "issue", "ok", "checked": {"description", "comments", "comments_total"}, "problems"}`. `location` is `description` or `comment`; a comment problem adds `comment_id`. |
-| `transition` without `--to` | `{"issue", "transitions": [...]}`. Each transition has `id`, `name`, and `to` cut to `{id, name}`. A transition that carries a resolution adds `"resolution": {"required": true, "allowed": [names]}`. |
+| `transition` without `--to` | `{"issue", "transitions": [...]}`. Each transition has `id`, `name`, and `to` cut to `{id, name}`. A transition that carries a resolution adds `"resolution": {"required": true, "allowed": [names]}`. A transition with `versions` adds `"versions": {"required": bool}`, and one that needs Fix Version/s (such as `Check in fix`) adds `"fixVersions": {"required": true}`. |
 | `attachment` | `{"issue", "count", "out_dir", "attachments": [...]}`. Each entry has `filename`, `size`, `mimeType`, `path`, `downloaded`, and `skipped` when the file was not saved. `--list` entries have `filename`, `size`, `mimeType`, and `content`, and the object has no `out_dir`. |
 | `cubrid-jira-kanban` | `{"total", "groups": [{"status", "count", "issues"}]}` |
 

@@ -1756,3 +1756,194 @@ def test_format_issue_markdown_renders_affects_version():
         },
     })
     assert "| Affects Version | guava, 11.4 Patch 7 |" in rendered
+
+
+# --------------------------------------------------------------------------- #
+# --fix-version (Check in fix needs Fix Version/s; failure #9)
+# --------------------------------------------------------------------------- #
+
+ISSUE_FIX_VERSIONS_GET_CBRD_7 = "/rest/api/2/issue/CBRD-7?fields=fixVersions"
+
+
+def _check_in_fix_transitions() -> dict:
+    """Handover issue, as on jira.cubrid.org: the screen marks fixVersions
+    optional, but a workflow validator rejects the transition without it."""
+    return {"transitions": [
+        {"id": "361", "name": " Check in fix", "fields": {
+            "resolution": {"required": True, "allowedValues": [
+                {"id": "1", "name": "Fixed"},
+                {"id": "7", "name": "Not a bug"},
+            ]},
+            "fixVersions": {"required": False, "allowedValues": [
+                {"id": "268572", "name": "guava"},
+                {"id": "100", "name": "11.4 Patch 7"},
+            ]},
+        }},
+        {"id": "631", "name": "Need Develop", "fields": {}},
+    ]}
+
+
+def test_transition_check_in_fix_without_fix_version_exits_in_dry_run(
+    fake_server, capsys
+):
+    fake_server.route("GET", TRANSITIONS_GET_CBRD_7, response=_check_in_fix_transitions())
+    fake_server.route(
+        "GET", ISSUE_FIX_VERSIONS_GET_CBRD_7, response={"fields": {"fixVersions": []}},
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        main(["transition", "CBRD-7", "--to", "Check in fix", "--resolution", "Fixed"])
+
+    assert exc.value.code == 1
+    err = capsys.readouterr().err
+    assert "requires Fix Version/s" in err and "--fix-version" in err
+    assert [r.method for r in fake_server.requests] == ["GET", "GET"]  # no POST
+
+
+def test_transition_check_in_fix_passes_when_issue_already_has_fix_version(
+    fake_server, capsys
+):
+    fake_server.route("GET", TRANSITIONS_GET_CBRD_7, response=_check_in_fix_transitions())
+    fake_server.route(
+        "GET", ISSUE_FIX_VERSIONS_GET_CBRD_7,
+        response={"fields": {"fixVersions": [{"id": "268572", "name": "guava"}]}},
+    )
+
+    main(["transition", "CBRD-7", "--to", "check in fix", "--resolution", "Fixed"])
+
+    assert json.loads(capsys.readouterr().out) == {
+        "transition": {"id": "361"}, "fields": {"resolution": {"id": "1"}},
+    }
+
+
+def test_transition_check_in_fix_sends_fix_version_with_jira_spelling(
+    fake_server, tmp_path, monkeypatch, capsys
+):
+    monkeypatch.setenv("CUBRID_JIRA_DIR", str(tmp_path))
+    fake_server.route("GET", TRANSITIONS_GET_CBRD_7, response=_check_in_fix_transitions())
+    fake_server.route("POST", "/rest/api/2/issue/CBRD-7/transitions", response={})
+
+    main([
+        "transition", "CBRD-7", "--to", "Check in fix", "--resolution", "Fixed",
+        "--fix-version", "GUAVA", "--yes", "--output", "json",
+    ])
+
+    # --fix-version given: no extra read of the issue's current fixVersions.
+    assert [r.method for r in fake_server.requests] == ["GET", "POST"]
+    assert json.loads(fake_server.requests[1].body.decode()) == {
+        "transition": {"id": "361"},
+        "fields": {"resolution": {"id": "1"}, "fixVersions": [{"name": "guava"}]},
+    }
+    assert json.loads(capsys.readouterr().out)["fix_versions"] == ["guava"]
+
+
+def test_transition_unknown_fix_version_exits_with_close_matches(fake_server, capsys):
+    fake_server.route("GET", TRANSITIONS_GET_CBRD_7, response=_check_in_fix_transitions())
+
+    with pytest.raises(SystemExit) as exc:
+        main([
+            "transition", "CBRD-7", "--to", "Check in fix", "--resolution", "Fixed",
+            "--fix-version", "guavaa",
+        ])
+
+    assert exc.value.code == 1
+    err = capsys.readouterr().err
+    assert "'guavaa' is not allowed" in err and "'guava'" in err
+    assert [r.method for r in fake_server.requests] == ["GET"]
+
+
+def test_transition_fix_version_on_screen_without_field_points_to_update(
+    fake_server, capsys
+):
+    fake_server.route("GET", TRANSITIONS_GET_CBRD_7, response=_check_in_fix_transitions())
+
+    with pytest.raises(SystemExit) as exc:
+        main(["transition", "CBRD-7", "--to", "Need Develop", "--fix-version", "guava"])
+
+    assert exc.value.code == 1
+    assert "cubrid-jira update CBRD-7 --fix-version guava" in capsys.readouterr().err
+
+
+def test_transition_fix_version_without_to_exits(fake_server, capsys):
+    fake_server.route("GET", TRANSITIONS_GET_CBRD_7, response=_check_in_fix_transitions())
+
+    with pytest.raises(SystemExit) as exc:
+        main(["transition", "CBRD-7", "--fix-version", "guava"])
+
+    assert exc.value.code == 1
+    assert "--fix-version requires --to" in capsys.readouterr().err
+
+
+def test_transition_listing_marks_check_in_fix_fix_version_required(fake_server, capsys):
+    fake_server.route("GET", TRANSITIONS_GET_CBRD_7, response=_check_in_fix_transitions())
+
+    main(["transition", "CBRD-7"])
+    out = capsys.readouterr().out
+    line = next(l for l in out.splitlines() if "Check in fix" in l)
+    assert "[fixVersions (required) via --fix-version]" in line
+    assert "fixVersions" not in next(l for l in out.splitlines() if "Need Develop" in l)
+
+    main(["transition", "CBRD-7", "--output", "json"])
+    listed = json.loads(capsys.readouterr().out)["transitions"]
+    assert listed[0]["fixVersions"] == {"required": True}
+    assert "fixVersions" not in listed[1]
+
+
+def test_update_fix_version_sends_fix_versions_payload(fake_server, capsys):
+    main([
+        "update", "CBRD-9", "--fix-version", "guava", "--fix-version", " guava ",
+    ])
+
+    assert json.loads(capsys.readouterr().out) == {
+        "fields": {"fixVersions": [{"name": "guava"}]},
+    }
+    assert fake_server.requests == []  # dry-run, no field lookup needed
+
+
+@pytest.mark.parametrize("field_name", ["fixVersions", "Fix Version/s"])
+def test_update_field_accepts_fix_versions_id_or_name_and_wraps_string(
+    fake_server, tmp_path, monkeypatch, capsys, field_name
+):
+    monkeypatch.setenv("CUBRID_JIRA_DIR", str(tmp_path))
+    (tmp_path / "field-map.json").write_text(json.dumps({
+        "Fix Version/s": ["fixVersions"],
+    }))
+
+    main(["update", "CBRD-9", "--field", f"{field_name}=guava"])
+
+    assert json.loads(capsys.readouterr().out) == {
+        "fields": {"fixVersions": [{"name": "guava"}]},
+    }
+    assert fake_server.requests == []  # resolved from the cached field map
+
+
+def test_update_field_system_id_cache_miss_refreshes_field_listing(
+    fake_server, tmp_path, monkeypatch, capsys
+):
+    monkeypatch.setenv("CUBRID_JIRA_DIR", str(tmp_path))
+    fake_server.route("GET", "/rest/api/2/field", response=[
+        {"id": "fixVersions", "name": "Fix Version/s"},
+    ])
+
+    main(["update", "CBRD-9", "--field", 'fixVersions=[{"name":"guava"}]'])
+
+    assert json.loads(capsys.readouterr().out) == {
+        "fields": {"fixVersions": [{"name": "guava"}]},
+    }
+    assert [r.method for r in fake_server.requests] == ["GET"]
+
+
+def test_update_fix_version_conflicts_with_field(fake_server, tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("CUBRID_JIRA_DIR", str(tmp_path))
+    (tmp_path / "field-map.json").write_text(json.dumps({
+        "Fix Version/s": ["fixVersions"],
+    }))
+
+    with pytest.raises(SystemExit) as exc:
+        main([
+            "update", "CBRD-9", "--fix-version", "guava",
+            "--field", "Fix Version/s=guava",
+        ])
+
+    assert exc.value.code == 1
+    assert "conflicts with --fix-version" in capsys.readouterr().err

@@ -87,6 +87,10 @@ command once, after a dry run of it.
   resolution, and JIRA cannot change a resolution afterwards. Use the name the
   user gave. If they gave none, show them the list and ask. Pass the name with
   `--resolution`.
+- **`transition` exits 1 with `requires Fix Version/s`.** `Check in fix` needs
+  a Fix Version/s and the issue has none. Use the version the user gave, or
+  `guava` for 11.5/develop work. Pass it with `--fix-version`; on a miss, the
+  error lists close matches.
 
 ## Read efficiently
 

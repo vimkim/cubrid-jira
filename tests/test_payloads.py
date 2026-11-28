@@ -370,3 +370,17 @@ def test_update_payload_custom_and_standard_together():
             "customfield_210565": "v",
         }
     }
+
+
+def test_transition_payload_with_fix_versions_and_resolution():
+    assert build_transition_payload("361", "1", fix_versions=["guava"]) == {
+        "transition": {"id": "361"},
+        "fields": {"resolution": {"id": "1"}, "fixVersions": [{"name": "guava"}]},
+    }
+
+
+def test_update_payload_fix_versions_empty_list_clears():
+    assert build_update_payload(fix_versions=[]) == {"fields": {"fixVersions": []}}
+    assert build_update_payload(fix_versions=["guava"]) == {
+        "fields": {"fixVersions": [{"name": "guava"}]},
+    }

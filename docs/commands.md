@@ -214,11 +214,11 @@ cubrid-jira comment-update ISSUE --id COMMENT-ID --body-file PATH [--from {markd
 cubrid-jira comment-delete ISSUE --id COMMENT-ID
 cubrid-jira link           ISSUE --type {Blocks,Cloners,Duplicate,Relates} --to KEY
 cubrid-jira transition     ISSUE [--to NAME] [--resolution NAME]
-                           [--affects-version VER ...]
+                           [--affects-version VER ...] [--fix-version VER ...]
 cubrid-jira assign         ISSUE --to USER
 cubrid-jira update         ISSUE [--summary TEXT] [--description-file PATH]
                            [--priority NAME] [--label L ...] [--component C ...]
-                           [--affects-version VER ...]
+                           [--affects-version VER ...] [--fix-version VER ...]
                            [--field FIELD=VALUE ...] [--from {markdown,jira}]
 ```
 
@@ -291,6 +291,8 @@ cubrid-jira transition CBRD-XXXXX
 cubrid-jira transition CBRD-XXXXX --to "In Progress"
 cubrid-jira transition CBRD-XXXXX --to "Bug Invalid" --resolution "Not a bug"
 cubrid-jira transition CBRD-XXXXX --to "Confirmed" --affects-version guava
+cubrid-jira transition CBRD-XXXXX --to "Check in fix" --resolution Fixed \
+  --fix-version guava
 ```
 
 Without `--to`, `transition` lists the transitions available from the current
@@ -309,6 +311,16 @@ Triage transitions (such as `Open` -> `Confirmed` on `Correct Error` issues in
 `--affects-version VERSION` (repeated if needed) when setting it on the
 transition screen (`11.5` normalizes to `guava`).
 
+`Check in fix` needs `Fix Version/s` (`fixVersions`). A workflow validator
+enforces it, so the screen marks the field optional and JIRA rejects the
+transition with HTTP 400 only after `--yes`. When the issue has no Fix
+Version/s, the CLI reads it first and exits with code 1, in a dry run too, until
+you pass `--fix-version VERSION` (repeated if needed). The CLI matches each name
+against the screen's allowed versions without regard to case, sends JIRA's
+spelling, and on a miss exits 1 with close matches. A transition whose screen
+has no `fixVersions` field rejects `--fix-version` and prints the
+`cubrid-jira update KEY --fix-version ...` command to run instead.
+
 `transition` exits with code 1 and lists the allowed names when:
 
 - the transition needs a resolution and `--resolution` is missing,
@@ -318,7 +330,7 @@ transition screen (`11.5` normalizes to `guava`).
 
 This check also runs in a dry run, so you see the problem before you add
 `--yes`. The transition list marks each transition that requires a resolution
-or exposes `versions` and shows its allowed resolution names.
+or Fix Version/s, or exposes `versions`, and shows its allowed resolution names.
 
 #### `assign`
 
@@ -333,16 +345,18 @@ cubrid-jira assign CBRD-XXXXX --to ""
 
 `update` edits fields of an existing issue. Give at least one of `--summary`,
 `--description-file`, `--priority`, `--label`, `--component`,
-`--affects-version`, or `--field`.
+`--affects-version`, `--fix-version`, or `--field`.
 
 ```sh
 cubrid-jira update CBRD-XXXXX --description-file notes.md
 cubrid-jira update CBRD-XXXXX --label oos --label vacuum
 cubrid-jira update CBRD-XXXXX --affects-version guava
+cubrid-jira update CBRD-XXXXX --fix-version guava
 ```
 
-- `--label`, `--component`, and `--affects-version` replace the whole list. To
-  add one value, pass the existing values too. (`11.5` normalizes to `guava`.)
+- `--label`, `--component`, `--affects-version`, and `--fix-version` replace
+  the whole list. To add one value, pass the existing values too. (`11.5`
+  normalizes to `guava` for `--affects-version` only.)
 - `--description-file -` reads the description from stdin.
 
 ### Set any field with `--field`
@@ -356,10 +370,14 @@ cubrid-jira create --project CBRD --type Task --summary "Measure vacuum lag" \
   --field 'QA Scenario={"value":"Not Required"}'
 ```
 
-- `FIELD` is a field id such as `customfield_210565` or a display name such as
-  `QA Scenario`. The CLI resolves names through `/rest/api/2/field` on first use
-  and caches the map in `<cache_dir>/field-map.json`. Alternate servers use
+- `FIELD` is a field id such as `customfield_210565` or `fixVersions`, or a
+  display name such as `QA Scenario` or `Fix Version/s`. The CLI resolves names
+  and system ids through `/rest/api/2/field` on first use and caches the map in
+  `<cache_dir>/field-map.json`. Alternate servers use
   `<cache_dir>/<hostname>/field-map.json`.
+- A plain `VALUE` for `versions` (Affects Version/s) or `fixVersions` (Fix
+  Version/s) is sent as `[{"name": VALUE}]`; an empty value clears the field.
+  Prefer `--affects-version` or `--fix-version`.
 - A `VALUE` that starts with `{` or `[` is decoded as JSON. Select,
   multi-select, cascading-select, user, and date fields need JSON. Any other
   value is sent as a plain string, which suits text fields.
