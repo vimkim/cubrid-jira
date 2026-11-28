@@ -1,0 +1,162 @@
+#!/usr/bin/env python3
+
+import argparse
+import json
+import re
+import subprocess
+import sys
+from urllib.parse import quote
+
+
+REPOSITORIES = (
+    "cubrid/cubrid",
+    "cubrid/cubrid-testcases",
+    "cubrid/cubrid-testcases-private-ex",
+)
+STALE_APPROVAL = "APPROVED (not at current head)"
+HEX40 = re.compile(r"^[0-9a-f]{40}$")
+
+
+def github(endpoint, *, paginated=False):
+    command = ["gh", "api", "--hostname", "github.com", "--method", "GET", endpoint]
+    if paginated:
+        command.extend(("--paginate", "--slurp"))
+    result = subprocess.run(command, capture_output=True, text=True, check=False)
+    if result.returncode:
+        raise ValueError(f"{endpoint}: {result.stderr.strip() or 'gh api failed'}")
+    data = json.loads(result.stdout)
+    if paginated:
+        if not data or not all(isinstance(page, list) for page in data):
+            raise ValueError(f"{endpoint}: expected paginated JSON arrays")
+        return [item for page in data for item in page]
+    return data
+
+
+def active_requests(events):
+    users = {}
+    teams = {}
+    request_events = [
+        event
+        for event in events
+        if event["event"] in ("review_requested", "review_request_removed")
+    ]
+    for event in sorted(request_events, key=lambda event: (event["created_at"], event["id"])):
+        target = event.get("requested_reviewer")
+        if target is not None:
+            key = target["login"].lower()
+            requests = users
+        else:
+            target = event["requested_team"]
+            key = target["slug"].lower()
+            requests = teams
+        if event["event"] == "review_requested":
+            requests[key] = (target, event["created_at"])
+        else:
+            requests.pop(key, None)
+    return users, teams
+
+
+def enlisted_reviewers(events, pending, author, exclude=()):
+    users, teams = active_requests(events)
+    pending_users = {user["login"].lower(): user for user in pending["users"]}
+    for login, user in pending_users.items():
+        users.setdefault(login, (user, ""))
+
+    for team in pending["teams"]:
+        slug = team["slug"]
+        _, requested_at = teams.get(slug.lower(), (team, ""))
+        members = github(f"orgs/CUBRID/teams/{quote(slug, safe='')}/members", paginated=True)
+        for user in members:
+            login = user["login"].lower()
+            if login not in users or users[login][1] < requested_at:
+                users[login] = (user, requested_at)
+
+    skip = {author.lower(), *(login.lower() for login in exclude)}
+    return {
+        login: (user["login"], requested_at, login in pending_users)
+        for login, (user, requested_at) in users.items()
+        if login not in skip and user["type"] != "Bot" and not login.endswith("[bot]")
+    }
+
+
+def latest_reviews(reviews):
+    latest = {}
+    for review in reviews:
+        user = review["user"]
+        if user is None:
+            continue
+        login = user["login"].lower()
+        if review["state"] != "COMMENTED" or login not in latest:
+            latest[login] = review
+    return latest
+
+
+def approval_status(review, requested_at, pending, head=None):
+    state = review["state"] if review else "no review"
+    if pending:
+        return False, f"{state} (pending request)"
+    if state != "APPROVED":
+        return False, state
+    submitted_at = review["submitted_at"]
+    if not submitted_at:
+        raise ValueError("APPROVED review has no submission time")
+    if submitted_at <= requested_at:
+        return False, "APPROVED (request at or after approval)"
+    if head is not None:
+        commit_id = review.get("commit_id")
+        if not isinstance(commit_id, str) or commit_id.lower() != head:
+            return False, STALE_APPROVAL
+    return True, state
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Check every enlisted CUBRID PR reviewer's approval.")
+    parser.add_argument("--repo", required=True, type=str.lower, choices=REPOSITORIES)
+    parser.add_argument("--pr", required=True, type=int)
+    parser.add_argument("--head", type=str.lower, help="require approvals at this 40-hex head SHA")
+    parser.add_argument(
+        "--exclude",
+        action="append",
+        default=[],
+        metavar="LOGIN",
+        help="exclude login from enlisted reviewers (repeatable, case-insensitive)",
+    )
+    args = parser.parse_args()
+    if args.pr < 1:
+        parser.error("--pr must be a positive integer")
+    if args.head is not None and not HEX40.fullmatch(args.head):
+        parser.error("--head must be a 40-hex commit SHA")
+
+    repo = f"CUBRID/{args.repo.split('/')[1]}"
+    pull = f"repos/{repo}/pulls/{args.pr}"
+    try:
+        pr = github(pull)
+        author = pr["user"]["login"]
+        if args.head is not None:
+            live_head = pr["head"]["sha"].lower()
+            if live_head != args.head:
+                raise ValueError(f"head moved: {live_head} != {args.head}")
+        reviews = latest_reviews(github(f"{pull}/reviews", paginated=True))
+        events = github(f"repos/{repo}/issues/{args.pr}/events", paginated=True)
+        pending = github(f"{pull}/requested_reviewers")
+        reviewers = enlisted_reviewers(events, pending, author, args.exclude)
+        verdicts = [
+            (name, *approval_status(reviews.get(login), requested_at, is_pending, args.head))
+            for login, (name, requested_at, is_pending) in sorted(reviewers.items())
+        ]
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        print(f"{repo}#{args.pr} ERROR: {error}", file=sys.stderr)
+        return 2
+
+    print(f"{repo}#{args.pr}")
+    for name, _, status in verdicts:
+        print(f"{name} {status}")
+    if not verdicts:
+        print("No enlisted reviewers")
+    passed = bool(verdicts) and all(approved for _, approved, _ in verdicts)
+    print("PASS" if passed else "BLOCKED")
+    return 0 if passed else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
