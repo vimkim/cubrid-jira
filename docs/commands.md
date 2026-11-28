@@ -416,6 +416,11 @@ The conversion handles these cases:
   a letter or digit. If it finds one, the write stops before sending, dry runs
   included, and stderr names the line and column. Run [`lint`](#lint) to check
   a body first.
+- **User mentions.** `[~username]` stays a Jira mention, so the user is
+  notified. Pandoc would otherwise send `\[\~username\]`, which JIRA shows as
+  text. A mention inside a code span or fenced code block stays literal, and
+  `[~x](url)`, `[~x][ref]`, and `\[~x]` are not mentions. `[~x]: text` is a
+  mention, not a link reference definition.
 - **Code fence labels.** The CLI maps fence labels to the formatter names that
   `jira.cubrid.org` supports. `text`, `plaintext`, and any unknown label become
   `none`, so the issue does not show an unsupported-formatter error.

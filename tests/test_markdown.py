@@ -381,3 +381,68 @@ def test_markdown_body_is_not_respaced_before_pandoc(source, expected):
 )
 def test_a_marker_pair_in_pandoc_output_is_never_respaced_as_emphasis(source, expected):
     assert markdown.markdown_to_jira_body(source) == expected
+
+
+# --------------------------------------------------------------------------- #
+# Jira user mentions [~user] survive the Markdown write path (failure #8)
+# --------------------------------------------------------------------------- #
+
+def test_protect_user_mentions_skips_code_spans_links_and_escapes():
+    text = (
+        "[~alice] and `[~code]` and [~link](http://x) [~ref][r] "
+        "[~span]{.c} \\[~escaped]\n"
+        "```\n[~fenced]\n```\n"
+    )
+
+    protected, mentions = markdown._protect_user_mentions(text)
+
+    assert [user for _token, user in mentions] == ["alice"]
+    token = mentions[0][0]
+    assert protected == text.replace("[~alice]", token, 1)
+
+
+def test_restore_user_mentions_does_not_confuse_token_1_with_token_10():
+    text = " ".join(f"[~u{i}]" for i in range(12))
+
+    protected, mentions = markdown._protect_user_mentions(text)
+
+    assert markdown._restore_user_mentions(protected, mentions) == text
+
+
+def test_protect_user_mentions_token_avoids_existing_text_case_insensitively():
+    _protected, mentions = markdown._protect_user_mentions(
+        "cubridjiramention0e [~bob]"
+    )
+
+    assert mentions[0][0].startswith("CUBRIDJIRAMENTIONX")
+
+
+@pytest.mark.skipif(not PANDOC_HAS_JIRA, reason="pandoc lacks Jira formats")
+@pytest.mark.parametrize(
+    "body, expected",
+    [
+        ("[~hornetmj] please check\n", "[~hornetmj] please check\n"),
+        ("확인 [~kim]님, [~foo.bar] and [~user_1].\n",
+         "확인 [~kim]님, [~foo.bar] and [~user_1].\n"),
+        # pandoc reads `[~x]: text` as a link reference definition and drops it.
+        ("[~foo]: please look\n", "[~foo]: please look\n"),
+        ("- item [~a]\n- **[~b]** bold\n", "* item [~a]\n* *[~b]* bold\n"),
+        ("| h | [~c] |\n|---|---|\n| [~d] | x |\n",
+         "|| h || [~c] ||\n| [~d] | x |\n"),
+        ("# [~foo] review\n", "h1. {anchor:foo-review}[~foo] review\n"),
+    ],
+)
+def test_markdown_to_jira_body_preserves_user_mentions(body, expected):
+    assert markdown.markdown_to_jira_body(body) == expected
+
+
+@pytest.mark.skipif(not PANDOC_HAS_JIRA, reason="pandoc lacks Jira formats")
+def test_markdown_to_jira_body_keeps_mention_shaped_code_and_links_literal():
+    jira = markdown.markdown_to_jira_body(
+        "`[~code]` [~link](http://x)\n\n```\n[~fenced]\n```\n"
+    )
+
+    assert jira == (
+        "{{\\[\\~code\\]}} [\\~link|http://x]\n\n"
+        "{noformat}\n[~fenced]\n{noformat}\n"
+    )

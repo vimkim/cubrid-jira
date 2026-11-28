@@ -448,6 +448,74 @@ def md_to_jira(md_text: str) -> str:
         raise MarkdownConversionError(message) from e
 
 
+# Jira user mention `[~username]`. Pandoc's Markdown reader treats it as text and
+# its Jira writer escapes it to `\[\~username\]`, which Jira renders literally
+# and does not notify. A Markdown link `[~x](url)`, reference link `[~x][ref]`,
+# or bracketed span `[~x]{.cls}` is not a mention. `[~x]: text` is a mention:
+# pandoc would read it as a link reference definition and drop the line.
+MARKDOWN_USER_MENTION_RE = re.compile(
+    r"(?<!\\)\[~(?P<user>[\w.@+-]+)\](?![(\[{])"
+)
+MARKDOWN_CODE_SPAN_RE = re.compile(r"(?P<ticks>`+).+?(?<!`)(?P=ticks)(?!`)")
+
+
+def _protect_user_mentions(text: str) -> tuple[str, list[tuple[str, str]]]:
+    """Hide Jira user mentions from Pandoc outside fenced code and code spans.
+
+    Returns the protected text and ``(token, username)`` pairs for
+    :func:`_restore_user_mentions`.
+    """
+    base = "CUBRIDJIRAMENTION"
+    while base.lower() in text.lower():
+        base += "X"
+
+    mentions: list[tuple[str, str]] = []
+
+    def protect(match: re.Match) -> str:
+        # The trailing "E" keeps token 1 from matching inside token 10.
+        token = f"{base}{len(mentions)}E"
+        mentions.append((token, match.group("user")))
+        return token
+
+    def protect_prose(segment: str) -> str:
+        return MARKDOWN_USER_MENTION_RE.sub(protect, segment)
+
+    result: list[str] = []
+    fence_marker = ""
+    for line in text.splitlines(keepends=True):
+        fence_match = MARKDOWN_FENCE_RE.match(line)
+        if fence_match:
+            marker = fence_match.group(1)
+            if not fence_marker:
+                fence_marker = marker
+            elif marker == fence_marker:
+                fence_marker = ""
+            result.append(line)
+            continue
+        if fence_marker or "[~" not in line:
+            result.append(line)
+            continue
+
+        position = 0
+        for span in MARKDOWN_CODE_SPAN_RE.finditer(line):
+            result.append(protect_prose(line[position:span.start()]))
+            result.append(span.group(0))
+            position = span.end()
+        result.append(protect_prose(line[position:]))
+
+    return "".join(result), mentions
+
+
+def _restore_user_mentions(
+    jira_text: str, mentions: list[tuple[str, str]]
+) -> str:
+    for token, user in mentions:
+        jira_text = jira_text.replace(token, f"[~{user}]")
+        # Pandoc copies heading text, lowercased, into {anchor:...}.
+        jira_text = jira_text.replace(token.lower(), user.lower())
+    return jira_text
+
+
 def markdown_to_jira_body(md_text: str) -> str:
     """Render local Markdown as Jira wiki markup suitable for writes."""
     simple_table_line = _find_simple_table_separator(md_text)
@@ -461,8 +529,10 @@ def markdown_to_jira_body(md_text: str) -> str:
     protected_markdown, escaped_pipe_token = _protect_escaped_pipes(
         protected_markdown
     )
+    protected_markdown, mentions = _protect_user_mentions(protected_markdown)
     jira_text = md_to_jira(sanitize_markdown(protected_markdown))
     jira_text = jira_text.replace(escaped_pipe_token, "&#124;")
+    jira_text = _restore_user_mentions(jira_text, mentions)
     jira_text = normalize_jira_code_languages(jira_text)
     jira_text = _normalize_fenced_code_placeholders(jira_text, code_replacements)
     # Pandoc already wrote any intended bold or emphasis in a form Jira reads.
